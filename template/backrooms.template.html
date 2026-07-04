@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bloco de arquitetura - UNAERP</title>
+    <title>BACKROOMS</title>
     <style>
         * {
             box-sizing: border-box;
@@ -49,6 +49,19 @@
             opacity: 0;
             z-index: 6;
             pointer-events: none;
+        }
+        /* Vinheta de "perda de visao" - pulsa quando o inimigo inicia uma perseguicao no nivel 2 */
+        #vision-vignette {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 7;
+            pointer-events: none;
+            background: radial-gradient(ellipse at center, rgba(0,0,0,0) 35%, rgba(0,0,0,0.92) 100%);
+            opacity: 0;
+            transition: opacity 0.6s ease;
         }
         /* HUD do Jogador */
         #hud {
@@ -161,10 +174,11 @@
 <body>
 
     <div id="vhs-overlay"></div>
+    <div id="vision-vignette"></div>
     <div id="canvas-container"></div>
 
     <div id="hud">
-        <div id="counter">TIJOLOS COLETADOS: 0 / 5</div>
+        <div id="counter">COLETADOS: 0 / 5</div>
         <div id="stamina-container">
             <div id="stamina-bar"></div>
         </div>
@@ -173,9 +187,9 @@
     <div class="rec-indicator">● REC</div>
 
     <div id="start-screen" class="screen">
-    <h1>UNIVERSIDADE FEDERAL DE UBERLÂNDIA</h1>
+    <h1>BACKROOMS</h1>
         <p>Você caiu em um labirinto infinito de salas vazias com cheiro de carpete úmido.
-           Para escapar deste pesadelo, colete os  <b>FORD KAS</b> vermelhos espalhados.
+           Para escapar deste pesadelo, colete o necessário para fugir.
            Mas cuidado... algo se esconde no gesso amarelo.</p>
         <p><b>Controles:</b><br>Clique na tela para travar o mouse (Olhar ao redor)<br>WASD - Movimentação | SHIFT - Correr</p>
         <button id="btn-start">ENTRAR NAS BACKROOMS</button>
@@ -221,22 +235,34 @@
 
     <script>
         // ==========================================
-        // COLE O SEU CÓDIGO GIGANTE BASE64 AQUI DENTRO DAS ASPAS:
+        // PER-LEVEL ASSET URLS (filled in at build time)
         // ==========================================
-        const MONSTER_IMAGE_URL = "__VILLAIN_IMAGE_DATA_URI__";
+        const LEVEL1_MONSTER_IMAGE_URL = "__LEVEL1_VILLAIN_IMAGE_DATA_URI__";
+        const LEVEL1_MONSTER_AUDIO_URL = "__LEVEL1_CHASE_AUDIO_DATA_URI__";
+        const LEVEL1_COLLECTIBLE_IMAGE_URL = "__LEVEL1_COLLECTIBLE_IMAGE_DATA_URI__";
+        const LEVEL1_JUMPSCARE_AUDIO_URL = "__LEVEL1_JUMPSCARE_AUDIO_DATA_URI__";
+        const LEVEL2_MONSTER_IMAGE_URL = "__LEVEL2_VILLAIN_IMAGE_DATA_URI__";
+        const LEVEL2_MONSTER_AUDIO_URL = "__LEVEL2_CHASE_AUDIO_DATA_URI__";
+        const LEVEL2_COLLECTIBLE_IMAGE_URL = "__LEVEL2_COLLECTIBLE_IMAGE_DATA_URI__";
+        const LEVEL2_JUMPSCARE_AUDIO_URL = "__LEVEL2_JUMPSCARE_AUDIO_DATA_URI__";
+        const LEVEL2_AMBIENT_AUDIO_URL = "__LEVEL2_AMBIENT_AUDIO_DATA_URI__";
+
         // ==========================================
-        // ESCOPO GLOBAL DO MOTOR DO JOGO
+        // GAME ENGINE GLOBAL SCOPE
         // ==========================================
         let scene, camera, renderer, clock;
         let mapGrid = [];
-        const gridSize = 20; 
-        const cellSize = 4;  
+        const gridSize = 20;
+        const cellSize = 4;
         let walls = [];
-        let bricks = [];
-        let bricksCollected = 0;
-        let totalBricks = 8;
+        let collectibles = [];
+        let collectiblesCollected = 0;
+        let totalCollectibles = __COLLECTIBLE_COUNT__;
 
-        // Minimapa comeca desativado; so liga com o codigo secreto w,w,s,s,a,d,a,d,space
+        // Which phase of the game is active: 1 (collect the items) or 2 (the final chase)
+        let currentLevel = 1;
+
+        // Minimap starts disabled; only toggles with the secret code w,w,s,s,a,d,a,d,space
         let minimapEnabled = false;
         const minimapCheatCode = ['KeyW', 'KeyW', 'KeyS', 'KeyS', 'KeyA', 'KeyD', 'KeyA', 'KeyD', 'Space'];
         let minimapCheatProgress = [];
@@ -253,7 +279,27 @@
             }
         }
 
-        // Otimização de Memória (Evitando travamentos)
+        // Secret code to jump straight to level 2 (classic Konami code, using arrow keys so it
+        // never collides with WASD movement): up,up,down,down,left,right,left,right,b,a
+        const level2CheatCode = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'KeyB', 'KeyA'];
+        let level2CheatProgress = [];
+        function checkLevel2CheatCode(code) {
+            level2CheatProgress.push(code);
+            if (level2CheatProgress.length > level2CheatCode.length) {
+                level2CheatProgress.shift();
+            }
+            if (level2CheatProgress.join(',') === level2CheatCode.join(',')) {
+                level2CheatProgress = [];
+                if (currentLevel === 1) {
+                    collectibles.forEach(c => scene.remove(c));
+                    collectibles = [];
+                    collectiblesCollected = totalCollectibles;
+                    startLevel2();
+                }
+            }
+        }
+
+        // Memory optimization (avoiding freezes / GC stutter)
         const upAxis = new THREE.Vector3(0, 1, 0);
         const _moveVector = new THREE.Vector3();
         const _forwardMat = new THREE.Vector3();
@@ -261,42 +307,78 @@
         const _dirToPlayer = new THREE.Vector3();
         const globalRaycaster = new THREE.Raycaster();
 
-        // Estado do Jogador
+        // Player state
         let player = {
-            pos: new THREE.Vector3(4, 0.8, 4), 
+            pos: new THREE.Vector3(4, 0.8, 4),
             rot: new THREE.Vector3(),
             speed: 0.05,
-            stamina: 1.8,
-            radius: 0.6 
+            stamina: 100,
+            radius: 0.6
         };
         let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false, isSprinting = false;
 
-        // Estado do Monstro
+        // Difficulty (1 to 10): starts at 1 and ramps up as the player collects items.
+        // For now only phase 1 is implemented, which caps out at level 5 on the last
+        // collectible - levels 6-10 are reserved for a future second phase.
+        const MAX_DIFFICULTY_LEVEL = 10;
+        const PHASE_ONE_MAX_DIFFICULTY_LEVEL = 5;
+        let difficultyLevel = 1;
+
+        // Monster state
         let monster = {
             mesh: null,
             pos: new THREE.Vector3(),
-            speed: 0.03, 
-            chaseSpeedMultiplier: 2.2, 
-            state: "PATROL", 
+            speed: 0.03,
+            chaseSpeedMultiplier: 1.4,
+            state: "PATROL",
             patrolTarget: new THREE.Vector3(),
             lostTimer: 0,
+            lostSightThreshold: 3,
             stuckTimer: 0,
             encounterTimer: 0,
-            chaseRadius: 18 
+            chaseRadius: 10,
+            currentPath: [],
+            pathTargetKey: null
         };
 
-        // Efeitos Sonoros / Web Audio API
+        // Recomputes difficultyLevel from collection progress (0 collected -> level 1,
+        // last collectible -> PHASE_ONE_MAX_DIFFICULTY_LEVEL) and applies it to the enemy's stats.
+        function updateDifficulty() {
+            let progress = totalCollectibles > 0 ? collectiblesCollected / totalCollectibles : 0;
+            difficultyLevel = 1 + Math.floor(progress * (PHASE_ONE_MAX_DIFFICULTY_LEVEL - 1));
+
+            // t goes from 0 (level 1, easiest) to 1 (level MAX_DIFFICULTY_LEVEL, hardest)
+            let t = (difficultyLevel - 1) / (MAX_DIFFICULTY_LEVEL - 1);
+            monster.chaseSpeedMultiplier = 1.4 + (2.4 - 1.4) * t;
+            monster.chaseRadius = 10 + (22 - 10) * t;
+            monster.lostSightThreshold = 3 + (10 - 3) * t;
+        }
+
+        // Sound effects / Web Audio API
         let audioCtx = null;
         let humOsc = null, humGain = null;
-        const MONSTER_AUDIO_URL = "__CHASE_AUDIO_DATA_URI__";
         let chaseAudioEl = null, chaseGain = null;
+        let ambientAudioEl = null; // level 2's continuous background soundtrack
         let lastFootstepTime = 0;
 
-        // Texturas procedurais geradas via Canvas HTML
+        // Procedural textures generated via HTML Canvas
         let wallTexture, floorTexture, ceilingTexture, monsterTexture;
+        let bloodWallTexture = null; // level 2's wall texture, generated on first use
+
+        // Cached GPU resources: created once per level and reused across resets, instead of
+        // recreated every time (the enemy/collectible image can differ between level 1 and 2)
+        let cachedWallGeometry = null, cachedWallMaterial = null;
+        let cachedMonsterMaterialByLevel = {};
+        let cachedCollectibleMaterialByLevel = {};
+
+        // Keeps a reference to the ambient light so its color can shift for level 2's atmosphere
+        let ambientLight;
+
+        // Recycled vector for grid scans (avoids creating hundreds of THREE.Vector3 per call)
+        const _scratchGridVec = new THREE.Vector3();
 
         // ==========================================
-        // GERADORES PROCEDURAIS DE TEXTURA
+        // PROCEDURAL TEXTURE GENERATORS
         // ==========================================
         function createProceduralTextures() {
             let canvas = document.createElement('canvas');
@@ -336,8 +418,36 @@
             ceilingTexture.repeat.set(8, 8);
         }
 
-        // Gerador procedural de labirinto (Prim randomizado - cria varias bifurcacoes,
-        // ao contrario do recursive backtracker que tende a formar corredores longos e unicos)
+        // Level 2's wall texture: same yellow wall as level 1, with blood blotches and
+        // drip streaks painted on top (the walls themselves don't change color)
+        function createBloodWallTexture() {
+            let canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 256;
+            let ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ccbe73'; ctx.fillRect(0, 0, 256, 256);
+            for (let i = 0; i < 5000; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? '#bdae62' : '#d6c883';
+                ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+            }
+            for (let i = 0; i < 22; i++) {
+                let x = Math.random() * 256;
+                let y = Math.random() * 190;
+                let radius = 6 + Math.random() * 16;
+                ctx.fillStyle = 'rgba(110, 8, 8, 0.8)';
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'rgba(90, 6, 6, 0.85)';
+                ctx.fillRect(x - 1.5, y, 3 + Math.random() * 2, 30 + Math.random() * 70);
+            }
+            let texture = new THREE.CanvasTexture(canvas);
+            texture.wrapS = THREE.RepeatWrapping; texture.wrapT = THREE.RepeatWrapping;
+            texture.repeat.set(1, 1);
+            return texture;
+        }
+
+        // Procedural maze generator (randomized Prim's algorithm - creates many forks,
+        // unlike the recursive backtracker which tends to form long single corridors)
         function generateMaze() {
             let grid = [];
             for (let r = 0; r < gridSize; r++) {
@@ -388,7 +498,7 @@
         }
 
         // ==========================================
-        // SINTETIZADOR DE ÁUDIO PROCEDURAL
+        // PROCEDURAL AUDIO SYNTHESIZER
         // ==========================================
         function initAudio() {
             if (audioCtx) return;
@@ -403,13 +513,13 @@
             lowpass.frequency.setValueAtTime(150, audioCtx.currentTime);
 
             humGain.gain.setValueAtTime(0.08, audioCtx.currentTime);
-            
+
             humOsc.connect(lowpass);
             lowpass.connect(humGain);
             humGain.connect(audioCtx.destination);
             humOsc.start();
 
-            chaseAudioEl = new Audio(MONSTER_AUDIO_URL);
+            chaseAudioEl = new Audio(LEVEL1_MONSTER_AUDIO_URL);
             chaseAudioEl.loop = true;
             let chaseSource = audioCtx.createMediaElementSource(chaseAudioEl);
             chaseGain = audioCtx.createGain();
@@ -426,10 +536,10 @@
             osc.type = 'sine';
             osc.frequency.setValueAtTime(120, audioCtx.currentTime);
             osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.12);
-            
+
             gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
             gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
-            
+
             osc.connect(gain);
             gain.connect(audioCtx.destination);
             osc.start();
@@ -441,12 +551,12 @@
             let osc = audioCtx.createOscillator();
             let gain = audioCtx.createGain();
             osc.type = 'sine';
-            osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); 
-            osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08); 
-            
+            osc.frequency.setValueAtTime(587.33, audioCtx.currentTime);
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08);
+
             gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
             gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
-            
+
             osc.connect(gain);
             gain.connect(audioCtx.destination);
             osc.start();
@@ -489,10 +599,10 @@
                 osc.type = i % 2 === 0 ? 'sawtooth' : 'square';
                 osc.frequency.setValueAtTime(2000 + (i * 350), audioCtx.currentTime);
                 osc.frequency.linearRampToValueAtTime(100, audioCtx.currentTime + 1.5);
-                
+
                 gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
                 gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 1.5);
-                
+
                 osc.connect(gain);
                 gain.connect(audioCtx.destination);
                 osc.start();
@@ -501,20 +611,20 @@
         }
 
         // ==========================================
-        // MINIMAPA DE DEBUG (labirinto, jogador, inimigo, Ford Kas)
+        // DEBUG MINIMAP (maze, player, enemy, collectibles)
         // ==========================================
         function drawMinimap() {
-            if (!minimapEnabled) return; // minimapa desativado ate o codigo secreto ser digitado
+            if (!minimapEnabled) return; // minimap disabled until the secret code is entered
             const canvas = document.getElementById('minimap');
-            if (!canvas) return; // canvas ainda nao existe no DOM
+            if (!canvas) return; // canvas doesn't exist in the DOM yet
             const ctx = canvas.getContext('2d');
-            const scale = canvas.width / gridSize; // pixels do canvas por celula do grid
+            const scale = canvas.width / gridSize; // canvas pixels per grid cell
 
-            // Fundo preto do minimapa
+            // Minimap black background
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Paredes do labirinto (cinza) - varre o mapGrid inteiro
+            // Maze walls (gray) - scans the whole mapGrid
             ctx.fillStyle = '#888';
             for (let r = 0; r < gridSize; r++) {
                 for (let c = 0; c < gridSize; c++) {
@@ -524,18 +634,18 @@
                 }
             }
 
-            // Ford Kas restantes no mapa (vermelho)
+            // Remaining collectibles on the map (red)
             ctx.fillStyle = '#ff3333';
-            for (const brick of bricks) {
-                // Converte posicao 3D (x, z) do mundo para coordenada de celula e depois para pixel do minimapa
-                let bc = (brick.position.x / cellSize) * scale;
-                let br = (brick.position.z / cellSize) * scale;
+            for (const collectible of collectibles) {
+                // Converts 3D (x, z) world position to grid cell coordinates, then to minimap pixels
+                let bc = (collectible.position.x / cellSize) * scale;
+                let br = (collectible.position.z / cellSize) * scale;
                 ctx.beginPath();
                 ctx.arc(bc, br, scale * 0.35, 0, Math.PI * 2);
                 ctx.fill();
             }
 
-            // Inimigo: amarelo em patrulha, magenta quando esta em perseguicao
+            // Enemy: yellow while patrolling, magenta while chasing
             if (monster.mesh) {
                 let mc = (monster.pos.x / cellSize) * scale;
                 let mr = (monster.pos.z / cellSize) * scale;
@@ -545,7 +655,7 @@
                 ctx.fill();
             }
 
-            // Jogador (verde) - desenhado por ultimo para ficar sempre visivel por cima dos outros pontos
+            // Player (green) - drawn last so it's always visible on top of the other points
             let pc = (player.pos.x / cellSize) * scale;
             let pr = (player.pos.z / cellSize) * scale;
             ctx.fillStyle = '#33ff33';
@@ -564,7 +674,7 @@
         }
 
         // ==========================================
-        // INICIALIZAÇÃO DO MUNDO 3D
+        // 3D WORLD INITIALIZATION
         // ==========================================
         function init() {
             clock = new THREE.Clock();
@@ -576,31 +686,18 @@
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             camera.rotation.order = 'YXZ';
             camera.position.copy(player.pos);
-            renderer = new THREE.WebGLRenderer({ antialias: false }); // Antialias false ajuda na performance
+            renderer = new THREE.WebGLRenderer({ antialias: false }); // antialias false helps performance
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-            const ambientLight = new THREE.AmbientLight('#444433', 1.2);
+            ambientLight = new THREE.AmbientLight('#444433', 1.2);
             scene.add(ambientLight);
             const flashlight = new THREE.PointLight('#fffaed', 1.5, 8);
             camera.add(flashlight);
             scene.add(camera);
 
-            const mazeData = generateMaze();
-            const wallGeo = new THREE.BoxGeometry(cellSize, cellSize, cellSize);
-            const wallMat = new THREE.MeshStandardMaterial({ map: wallTexture, roughness: 0.8 });
-            for (let r = 0; r < gridSize; r++) {
-                mapGrid[r] = [];
-                for (let c = 0; c < gridSize; c++) {
-                    mapGrid[r][c] = mazeData[r][c];
-                    if (mazeData[r][c] === 1) {
-                        const wall = new THREE.Mesh(wallGeo, wallMat);
-                        wall.position.set(c * cellSize, cellSize / 2, r * cellSize);
-                        scene.add(wall);
-                        walls.push(wall);
-                    }
-                }
-            }
+            buildWalls(generateMaze());
 
             const floorGeo = new THREE.PlaneGeometry(gridSize * cellSize, gridSize * cellSize);
             const floorMat = new THREE.MeshStandardMaterial({ map: floorTexture, roughness: 0.9 });
@@ -614,33 +711,72 @@
             ceiling.position.set((gridSize * cellSize)/2 - cellSize/2, cellSize, (gridSize * cellSize)/2 - cellSize/2);
             scene.add(ceiling);
 
-            spawnBricks();
+            spawnCollectibles();
+            document.getElementById('counter').innerText = `COLETADOS: 0 / ${totalCollectibles}`;
+            difficultyLevel = 1;
+            updateDifficulty();
             setupMonster();
             window.addEventListener('resize', onWindowResize, false);
             setupControls();
         }
 
-        const BRICK_IMAGE_URL = "__COLLECTIBLE_IMAGE_DATA_URI__";
-        function spawnBricks() {
-            let brickTexLoader = new THREE.TextureLoader();
-            let brickTexture = brickTexLoader.load(BRICK_IMAGE_URL);
-            const brickMat = new THREE.SpriteMaterial({ map: brickTexture });
-            
+        function buildWalls(newMazeData) {
+            // Create the shared wall geometry/material once and reuse them on every rebuild
+            if (!cachedWallGeometry) cachedWallGeometry = new THREE.BoxGeometry(cellSize, cellSize, cellSize);
+            if (!cachedWallMaterial) cachedWallMaterial = new THREE.MeshStandardMaterial({ map: wallTexture, roughness: 0.8 });
+
+            for (let r = 0; r < gridSize; r++) {
+                if (newMazeData) mapGrid[r] = [];
+                for (let c = 0; c < gridSize; c++) {
+                    if (newMazeData) mapGrid[r][c] = newMazeData[r][c];
+                    if (mapGrid[r][c] === 1) {
+                        const wall = new THREE.Mesh(cachedWallGeometry, cachedWallMaterial);
+                        wall.position.set(c * cellSize, cellSize / 2, r * cellSize);
+                        scene.add(wall);
+                        walls.push(wall);
+                    }
+                }
+            }
+        }
+
+        function getOrCreateCollectibleMaterial(level) {
+            if (!cachedCollectibleMaterialByLevel[level]) {
+                let url = level === 2 ? LEVEL2_COLLECTIBLE_IMAGE_URL : LEVEL1_COLLECTIBLE_IMAGE_URL;
+                let collectibleTexLoader = new THREE.TextureLoader();
+                let collectibleTexture = collectibleTexLoader.load(url);
+                cachedCollectibleMaterialByLevel[level] = new THREE.SpriteMaterial({ map: collectibleTexture });
+            }
+            return cachedCollectibleMaterialByLevel[level];
+        }
+
+        function getOrCreateMonsterMaterial(level) {
+            if (!cachedMonsterMaterialByLevel[level]) {
+                let url = level === 2 ? LEVEL2_MONSTER_IMAGE_URL : LEVEL1_MONSTER_IMAGE_URL;
+                let texLoader = new THREE.TextureLoader();
+                let tex = texLoader.load(url);
+                cachedMonsterMaterialByLevel[level] = new THREE.SpriteMaterial({ map: tex });
+            }
+            return cachedMonsterMaterialByLevel[level];
+        }
+
+        function spawnCollectibles() {
+            let collectibleMaterial = getOrCreateCollectibleMaterial(currentLevel);
+
             let emptyCells = [];
             for (let r = 1; r < gridSize - 1; r++) {
                 for (let c = 1; c < gridSize - 1; c++) {
-                    if (mapGrid[r] && mapGrid[r][c] === 0 && !(r < 3 && c < 3)) { 
+                    if (mapGrid[r] && mapGrid[r][c] === 0 && !(r < 3 && c < 3)) {
                         emptyCells.push({ r, c });
                     }
                 }
             }
 
-            // Espalhamento maximo (farthest-point): cada novo Ford Ka e o mais distante
-            // possivel dos ja escolhidos, garantindo que nunca fiquem proximos
+            // Maximum spread (farthest-point): each new collectible is placed as far as
+            // possible from the ones already chosen, so they never end up close together
             let chosenCells = [];
             if (emptyCells.length > 0) {
                 chosenCells.push(emptyCells[Math.floor(Math.random() * emptyCells.length)]);
-                while (chosenCells.length < totalBricks && chosenCells.length < emptyCells.length) {
+                while (chosenCells.length < totalCollectibles && chosenCells.length < emptyCells.length) {
                     let best = null;
                     let bestDist = -1;
                     for (const cell of emptyCells) {
@@ -656,27 +792,55 @@
                     if (best) chosenCells.push(best);
                 }
             }
-            totalBricks = chosenCells.length;
+            totalCollectibles = chosenCells.length;
 
             for (const cell of chosenCells) {
-                let mesh = new THREE.Sprite(brickMat);
+                let mesh = new THREE.Sprite(collectibleMaterial);
                 mesh.scale.set(0.5, 0.5, 1);
                 let x = cell.c * cellSize;
                 let z = cell.r * cellSize;
                 mesh.position.set(x, 0.3, z);
                 scene.add(mesh);
-                bricks.push(mesh);
+                collectibles.push(mesh);
             }
         }
 
+        // Level 2's single collectible: placed as far away as possible from the player's
+        // current position, so reaching it is the whole point of the final chase.
+        function spawnFarthestCollectible() {
+            let collectibleMaterial = getOrCreateCollectibleMaterial(currentLevel);
+
+            let emptyCells = [];
+            for (let r = 1; r < gridSize - 1; r++) {
+                for (let c = 1; c < gridSize - 1; c++) {
+                    if (mapGrid[r] && mapGrid[r][c] === 0) {
+                        emptyCells.push({ r, c });
+                    }
+                }
+            }
+
+            let best = null, bestDist = -1;
+            for (const cell of emptyCells) {
+                _scratchGridVec.set(cell.c * cellSize, 0.9, cell.r * cellSize);
+                let d = player.pos.distanceTo(_scratchGridVec);
+                if (d > bestDist) {
+                    bestDist = d;
+                    best = cell;
+                }
+            }
+            if (!best) return;
+
+            let mesh = new THREE.Sprite(collectibleMaterial);
+            mesh.scale.set(0.5, 0.5, 1);
+            mesh.position.set(best.c * cellSize, 0.3, best.r * cellSize);
+            scene.add(mesh);
+            collectibles.push(mesh);
+        }
+
         function setupMonster() {
-            let texLoader = new THREE.TextureLoader();
-            monsterTexture = texLoader.load(MONSTER_IMAGE_URL);
-            
-            let monsterMat = new THREE.SpriteMaterial({ map: monsterTexture });
-            monster.mesh = new THREE.Sprite(monsterMat);
+            monster.mesh = new THREE.Sprite(getOrCreateMonsterMaterial(currentLevel));
             monster.mesh.scale.set(1.8, 1.8, 1);
-            
+
             monster.pos.set((gridSize - 3) * cellSize, 0.9, (gridSize - 3) * cellSize);
             monster.mesh.position.copy(monster.pos);
             scene.add(monster.mesh);
@@ -684,7 +848,7 @@
         }
 
         // ==========================================
-        // CONTROLES E CÂMERA 
+        // CONTROLS AND CAMERA
         // ==========================================
         function setupControls() {
             const btnStart = document.getElementById('btn-start');
@@ -696,7 +860,7 @@
                     document.getElementById('start-screen').style.display = 'none';
                     initAudio();
                 } else {
-                    if (bricksCollected < totalBricks && monster.state !== "DEAD") {
+                    if (collectiblesCollected < totalCollectibles && monster.state !== "DEAD") {
                         document.getElementById('start-screen').style.display = 'flex';
                     }
                 }
@@ -710,6 +874,7 @@
                     case 'ShiftLeft': isSprinting = true; break;
                 }
                 checkMinimapCheatCode(e.code);
+                checkLevel2CheatCode(e.code);
             });
             window.addEventListener('keyup', (e) => {
                 switch (e.code) {
@@ -720,13 +885,13 @@
                     case 'ShiftLeft': isSprinting = false; break;
                 }
             });
-            
+
             document.addEventListener('mousemove', (e) => {
                 if (document.pointerLockElement !== document.body) return;
-                
-                player.rot.y -= e.movementX * 0.0025; 
-                player.rot.x -= e.movementY * 0.0025; 
-                
+
+                player.rot.y -= e.movementX * 0.0025;
+                player.rot.x -= e.movementY * 0.0025;
+
                 player.rot.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, player.rot.x));
                 camera.rotation.set(player.rot.x, player.rot.y, 0, 'YXZ');
             });
@@ -735,7 +900,7 @@
         }
 
         // ==========================================
-        // SISTEMA DE COLISÃO
+        // COLLISION SYSTEM
         // ==========================================
         function checkCollision(targetX, targetZ) {
             const buffer = player.radius;
@@ -748,32 +913,72 @@
             for (let p of checkPoints) {
                 let cellX = Math.round(p.x / cellSize);
                 let cellZ = Math.round(p.z / cellSize);
-                
+
                 if (cellX < 0 || cellX >= gridSize || cellZ < 0 || cellZ >= gridSize) return true;
-                if (mapGrid[cellZ] && mapGrid[cellZ][cellX] === 1) return true; 
+                if (mapGrid[cellZ] && mapGrid[cellZ][cellX] === 1) return true;
             }
             return false;
         }
 
         // ==========================================
-        // INTELIGÊNCIA ARTIFICIAL DO MONSTRO
+        // MONSTER ARTIFICIAL INTELLIGENCE
         // ==========================================
+
+        // Breadth-first search over the maze grid: returns the list of cells (excluding the
+        // start) leading from (startR, startC) to (goalR, goalC), or null if unreachable.
+        // This lets the enemy actually navigate around corners instead of walking straight
+        // at the target and getting stuck on walls whenever the direct line is blocked.
+        function findPath(startR, startC, goalR, goalC) {
+            if (startR === goalR && startC === goalC) return [];
+            const key = (r, c) => r + ',' + c;
+            const visited = new Set([key(startR, startC)]);
+            const cameFrom = new Map();
+            const queue = [[startR, startC]];
+            let qi = 0;
+            const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+
+            while (qi < queue.length) {
+                const [r, c] = queue[qi++];
+                if (r === goalR && c === goalC) {
+                    let path = [];
+                    let curKey = key(r, c);
+                    while (curKey !== key(startR, startC)) {
+                        const [pr, pc] = curKey.split(',').map(Number);
+                        path.push({ r: pr, c: pc });
+                        curKey = cameFrom.get(curKey);
+                    }
+                    path.reverse();
+                    return path;
+                }
+                for (const [dr, dc] of dirs) {
+                    const nr = r + dr, nc = c + dc;
+                    if (nr < 0 || nr >= gridSize || nc < 0 || nc >= gridSize) continue;
+                    if (!mapGrid[nr] || mapGrid[nr][nc] !== 0) continue;
+                    const nk = key(nr, nc);
+                    if (visited.has(nk)) continue;
+                    visited.add(nk);
+                    cameFrom.set(nk, key(r, c));
+                    queue.push([nr, nc]);
+                }
+            }
+            return null;
+        }
+
         function pickNewPatrolTarget() {
             let validCells = [];
             for (let r = 1; r < gridSize - 1; r++) {
                 for (let c = 1; c < gridSize - 1; c++) {
                     if (mapGrid[r] && mapGrid[r][c] === 0) {
-                        let cellX = c * cellSize;
-                        let cellZ = r * cellSize;
-                        let distToPlayer = player.pos.distanceTo(new THREE.Vector3(cellX, 0.9, cellZ));
+                        _scratchGridVec.set(c * cellSize, 0.9, r * cellSize);
+                        let distToPlayer = player.pos.distanceTo(_scratchGridVec);
                         validCells.push({ r, c, distToPlayer });
                     }
                 }
             }
             validCells.sort((a, b) => a.distToPlayer - b.distToPlayer);
-            let maxRangeIndex = Math.min(Math.floor(validCells.length * 0.45), validCells.length); 
+            let maxRangeIndex = Math.min(Math.floor(validCells.length * 0.45), validCells.length);
             if(maxRangeIndex < 1) maxRangeIndex = validCells.length;
-            
+
             let choice = validCells[Math.floor(Math.random() * maxRangeIndex)];
             if(choice) {
                 monster.patrolTarget.set(choice.c * cellSize, 0.9, choice.r * cellSize);
@@ -781,25 +986,24 @@
         }
 
         function relocateMonsterNearPlayer() {
-            // Direcao para a qual o jogador esta olhando, para nao reposicionar o monstro logo atras dele
+            // Direction the player is currently facing, so we avoid placing the enemy right behind them
             let forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(upAxis, player.rot.y);
 
             let allOpenCells = [];
             for (let r = 1; r < gridSize - 1; r++) {
                 for (let c = 1; c < gridSize - 1; c++) {
                     if (mapGrid[r] && mapGrid[r][c] === 0) {
-                        let cellPos = new THREE.Vector3(c * cellSize, 0.9, r * cellSize);
-                        let d = player.pos.distanceTo(cellPos);
-                        let dirToCell = cellPos.clone().sub(player.pos).normalize();
-                        let facingDot = dirToCell.dot(forward);
+                        _scratchGridVec.set(c * cellSize, 0.9, r * cellSize);
+                        let d = player.pos.distanceTo(_scratchGridVec);
+                        let facingDot = _scratchGridVec.sub(player.pos).normalize().dot(forward);
                         allOpenCells.push({ r, c, d, facingDot });
                     }
                 }
             }
 
-            // Faixa preferida: ~4 a 5 blocos de distancia, fora da zona diretamente atras do jogador
+            // Preferred range: ~4 to 5 tiles away, outside the zone directly behind the player
             let candidates = allOpenCells.filter(cell => cell.d > 16 && cell.d < 20 && cell.facingDot > -0.5);
-            // Fallback: se nao houver nenhuma celula nessa faixa exata, alarga um pouco a busca
+            // Fallback: if no cell exists in that exact range, widen the search a bit
             if (candidates.length === 0) {
                 candidates = allOpenCells.filter(cell => cell.d > 12 && cell.d < 28 && cell.facingDot > -0.5);
             }
@@ -815,14 +1019,15 @@
         function updateMonsterAI(delta) {
             if (!monster.mesh) return;
             let distToPlayer = monster.pos.distanceTo(player.pos);
-            
+            monster.distToPlayer = distToPlayer; // exposed for the level 2 proximity glitch effect
+
             let hasLineOfSight = false;
             if (distToPlayer < monster.chaseRadius) {
-                // OTIMIZAÇÃO: Reciclando vetores
+                // OPTIMIZATION: reusing vectors
                 _dirToPlayer.subVectors(player.pos, monster.pos).normalize();
                 globalRaycaster.set(monster.pos, _dirToPlayer);
                 let intersects = globalRaycaster.intersectObjects(walls);
-                
+
                 if (intersects.length === 0 || intersects[0].distance > distToPlayer) {
                     hasLineOfSight = true;
                 }
@@ -832,15 +1037,16 @@
                 if (monster.state !== "CHASE") {
                     playChaseGlitchSound();
                     if (chaseAudioEl) chaseAudioEl.currentTime = 0;
+                    if (currentLevel === 2) triggerVisionVignette();
                 }
                 monster.state = "CHASE";
-                monster.lostTimer = 0; 
+                monster.lostTimer = 0;
                 monster.encounterTimer = 0;
             } else if (monster.state === "CHASE") {
                 monster.lostTimer += delta;
-                if (monster.lostTimer > 3.0) { 
-                    monster.state = "PATROL";
-                    pickNewPatrolTarget();
+                if (monster.lostTimer > monster.lostSightThreshold) {
+                    // Lost the player during a chase: respawn somewhere not too close, not too far
+                    relocateMonsterNearPlayer();
                 }
             }
 
@@ -853,20 +1059,46 @@
             }
 
             let target = (monster.state === "CHASE") ? player.pos : monster.patrolTarget;
-            
-            // OTIMIZAÇÃO: Calculando movimento sem criar novos vetores toda hora
-            let dx = target.x - monster.pos.x;
-            let dz = target.z - monster.pos.z;
+
+            // Recompute the route whenever the target moves to a different cell (not every
+            // single frame) - this is what lets the enemy walk around corners instead of
+            // pushing straight into a wall and getting stuck when it can't see the player anymore.
+            let targetR = Math.round(target.z / cellSize);
+            let targetC = Math.round(target.x / cellSize);
+            let targetKey = targetR + ',' + targetC;
+            if (targetKey !== monster.pathTargetKey) {
+                let startR = Math.round(monster.pos.z / cellSize);
+                let startC = Math.round(monster.pos.x / cellSize);
+                monster.currentPath = findPath(startR, startC, targetR, targetC) || [];
+                monster.pathTargetKey = targetKey;
+            }
+
+            // Steers toward the next waypoint of the route (not straight at the final target)
+            let moveTargetX = target.x, moveTargetZ = target.z;
+            if (monster.currentPath.length > 0) {
+                let waypoint = monster.currentPath[0];
+                moveTargetX = waypoint.c * cellSize;
+                moveTargetZ = waypoint.r * cellSize;
+                let distToWaypoint = Math.hypot(monster.pos.x - moveTargetX, monster.pos.z - moveTargetZ);
+                if (distToWaypoint < cellSize * 0.35) {
+                    monster.currentPath.shift();
+                }
+            }
+
+            // OPTIMIZATION: computing movement without creating new vectors every time
+            let dx = moveTargetX - monster.pos.x;
+            let dz = moveTargetZ - monster.pos.z;
             let dist = Math.sqrt(dx*dx + dz*dz);
-            
+
             let currentSpeed = (monster.state === "CHASE") ? monster.speed * monster.chaseSpeedMultiplier : monster.speed;
-            
+
             let didMove = false;
             if (dist > 0.1) {
                 let moveX = (dx / dist) * currentSpeed * delta * 60;
                 let moveZ = (dz / dist) * currentSpeed * delta * 60;
 
-                // Movimento por eixo separado: permite "deslizar" nas paredes em vez de travar em quinas
+                // Movement on separate axes: lets the enemy "slide" along walls (fine alignment only,
+                // real navigation around corners is handled by the path computed above)
                 let cellZatCurrentX = Math.round(monster.pos.z / cellSize);
                 let checkCellX = Math.round((monster.pos.x + moveX) / cellSize);
                 if (mapGrid[cellZatCurrentX] && mapGrid[cellZatCurrentX][checkCellX] === 0) {
@@ -886,15 +1118,16 @@
                 if (monster.state === "PATROL") pickNewPatrolTarget();
             }
 
-            // Se o monstro ficar sem se mover por muito tempo (preso em parede/quina), forca um novo alvo
+            // If the enemy stays stuck without moving for too long (wall/corner), force a full
+            // route recalculation and, if patrolling, a new target too
             if (didMove) {
                 monster.stuckTimer = 0;
             } else {
                 monster.stuckTimer += delta;
                 if (monster.stuckTimer > 1.5) {
                     monster.stuckTimer = 0;
-                    monster.state = "PATROL";
-                    pickNewPatrolTarget();
+                    monster.pathTargetKey = null;
+                    if (monster.state === "PATROL") pickNewPatrolTarget();
                 }
             }
 
@@ -906,21 +1139,32 @@
         }
 
         // ==========================================
-        // GAME OVER E JUMPSCARE
+        // GAME OVER AND JUMPSCARE
         // ==========================================
-        const JUMPSCARE_AUDIO_URL = "__JUMPSCARE_AUDIO_DATA_URI__";
+        function stopAmbientAudio() {
+            if (ambientAudioEl) {
+                ambientAudioEl.pause();
+                ambientAudioEl = null;
+            }
+        }
+
         function triggerJumpscare() {
             monster.state = "DEAD";
             document.exitPointerLock();
-            
+
+            let jumpscareAudioUrl = currentLevel === 2 ? LEVEL2_JUMPSCARE_AUDIO_URL : LEVEL1_JUMPSCARE_AUDIO_URL;
+            let jumpscareImageUrl = currentLevel === 2 ? LEVEL2_MONSTER_IMAGE_URL : LEVEL1_MONSTER_IMAGE_URL;
+
             playJumpscareSound();
-            new Audio(JUMPSCARE_AUDIO_URL).play();
-            if(audioCtx && chaseGain) chaseGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            new Audio(jumpscareAudioUrl).play();
+            if (audioCtx && chaseGain) chaseGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            if (chaseAudioEl) chaseAudioEl.pause();
+            stopAmbientAudio();
 
             const jsScreen = document.getElementById('jumpscare-screen');
             const jsImg = document.getElementById('jumpscare-img');
-            jsImg.src = MONSTER_IMAGE_URL;
-            
+            jsImg.src = jumpscareImageUrl;
+
             jsScreen.style.display = 'flex';
             setTimeout(() => {
                 jsScreen.style.display = 'none';
@@ -929,23 +1173,23 @@
         }
 
         // ==========================================
-        // LOOP DO JOGO
+        // GAME LOOP
         // ==========================================
         function animate() {
             requestAnimationFrame(animate);
             let delta = clock.getDelta();
             if (delta > 0.1) delta = 0.1;
-            
+
             if (document.pointerLockElement === document.body && monster.state !== "DEAD") {
-                
-                let basePlayerSpeed = 0.05; 
-                let sprintPlayerSpeedMultiplier = 1.8; 
+
+                let basePlayerSpeed = 0.05;
+                let sprintPlayerSpeedMultiplier = 1.8;
                 let currentMaxSpeed = basePlayerSpeed;
                 let isMoving = moveForward || moveBackward || moveLeft || moveRight;
-                
+
                 if (isSprinting && isMoving && player.stamina > 0) {
                     currentMaxSpeed = basePlayerSpeed * sprintPlayerSpeedMultiplier;
-                    player.stamina -= delta * 35; 
+                    player.stamina -= delta * 35;
                     if (player.stamina < 0) player.stamina = 0;
                 } else {
                     if (player.stamina < 100) {
@@ -953,12 +1197,12 @@
                         if (player.stamina > 100) player.stamina = 100;
                     }
                     if (player.stamina < 15 && isSprinting) {
-                        currentMaxSpeed = basePlayerSpeed * 0.6; 
+                        currentMaxSpeed = basePlayerSpeed * 0.6;
                     }
                 }
                 document.getElementById('stamina-bar').style.width = player.stamina + '%';
-                
-                // OTIMIZAÇÃO: Reciclando matemática vetorial
+
+                // OPTIMIZATION: reusing vector math
                 _moveVector.set(0, 0, 0);
                 _forwardMat.set(0, 0, -1).applyAxisAngle(upAxis, player.rot.y);
                 _rightMat.set(1, 0, 0).applyAxisAngle(upAxis, player.rot.y);
@@ -973,10 +1217,10 @@
                     let stepDist = currentMaxSpeed * delta * 60;
                     let checkX = player.pos.x + (_moveVector.x * stepDist);
                     let checkZ = player.pos.z + (_moveVector.z * stepDist);
-                    
+
                     if (!checkCollision(checkX, player.pos.z)) player.pos.x = checkX;
                     if (!checkCollision(player.pos.x, checkZ)) player.pos.z = checkZ;
-                    
+
                     let now = Date.now();
                     let stepDelay = isSprinting ? 280 : 450;
                     if (now - lastFootstepTime > stepDelay) {
@@ -996,70 +1240,155 @@
                     camera.position.z += (Math.random() - 0.5) * 0.06;
                 }
 
-                for (let i = bricks.length - 1; i >= 0; i--) {
-                    if (player.pos.distanceTo(bricks[i].position) < 1.0) {
-                        scene.remove(bricks[i]);
-                        bricks.splice(i, 1);
-                        bricksCollected++;
-                        document.getElementById('counter').innerText = `FORD KAS COLETADOS: ${bricksCollected} / 5`;
+                for (let i = collectibles.length - 1; i >= 0; i--) {
+                    if (player.pos.distanceTo(collectibles[i].position) < 1.0) {
+                        scene.remove(collectibles[i]);
+                        collectibles.splice(i, 1);
+                        collectiblesCollected++;
+                        if (currentLevel === 1) updateDifficulty();
+                        document.getElementById('counter').innerText = `COLETADOS: ${collectiblesCollected} / ${totalCollectibles}`;
                         playCollectSound();
-                        if (bricksCollected >= totalBricks) {
-                            triggerWin();
+                        if (collectiblesCollected >= totalCollectibles) {
+                            if (currentLevel === 1) {
+                                startLevel2();
+                            } else {
+                                triggerWin();
+                            }
                         }
                     }
                 }
 
                 updateMonsterAI(delta);
+                updateLevel2GlitchEffect();
                 drawMinimap();
             }
 
-            bricks.forEach(brick => {
-                brick.rotation.y += 0.02;
-                brick.position.y = 0.3 + Math.sin(Date.now() * 0.003) * 0.05;
+            collectibles.forEach(collectible => {
+                collectible.rotation.y += 0.02;
+                collectible.position.y = 0.3 + Math.sin(Date.now() * 0.003) * 0.05;
             });
             renderer.render(scene, camera);
         }
 
         // ==========================================
-        // FLUXO DE TELAS DO JOGO
+        // GAME SCREEN FLOW
         // ==========================================
+
+        // Transition into the final phase: reskins the enemy/collectible/audio for level 2,
+        // turns the maze bloody and reddish, starts the ambient soundtrack, and spawns the
+        // single collectible as far away from the player as the maze allows.
+        function startLevel2() {
+            currentLevel = 2;
+            collectiblesCollected = 0;
+            totalCollectibles = 1;
+            document.getElementById('counter').innerText = `COLETADOS: 0 / ${totalCollectibles}`;
+
+            if (!bloodWallTexture) bloodWallTexture = createBloodWallTexture();
+            if (cachedWallMaterial) {
+                cachedWallMaterial.map = bloodWallTexture;
+                cachedWallMaterial.needsUpdate = true;
+            }
+            scene.background = new THREE.Color('#2a0808');
+            scene.fog.color = new THREE.Color('#2a0808');
+            if (ambientLight) ambientLight.color = new THREE.Color('#663322');
+
+            // The final enemy is a bit faster than whatever chase speed level 1 ended on
+            monster.chaseSpeedMultiplier *= 1.2;
+
+            monster.mesh.material = getOrCreateMonsterMaterial(currentLevel);
+
+            if (chaseAudioEl) {
+                chaseAudioEl.pause();
+                chaseAudioEl.src = LEVEL2_MONSTER_AUDIO_URL;
+                chaseAudioEl.load();
+                chaseAudioEl.play();
+            }
+            stopAmbientAudio();
+            ambientAudioEl = new Audio(LEVEL2_AMBIENT_AUDIO_URL);
+            ambientAudioEl.loop = true;
+            ambientAudioEl.volume = 0.5;
+            ambientAudioEl.play();
+
+            spawnFarthestCollectible();
+        }
+
+        // Intensifies the VHS overlay (opacity + contrast) the closer the enemy gets to the
+        // player during level 2 - "the screen glitches like a failing camera"
+        function updateLevel2GlitchEffect() {
+            const vhsOverlay = document.getElementById('vhs-overlay');
+            if (!vhsOverlay) return;
+            if (currentLevel !== 2 || !monster.mesh) {
+                vhsOverlay.style.opacity = '';
+                vhsOverlay.style.filter = '';
+                return;
+            }
+            const proximityRange = 15; // distance at which the effect starts kicking in
+            let proximity = Math.max(0, 1 - ((monster.distToPlayer || proximityRange) / proximityRange));
+            vhsOverlay.style.opacity = (0.85 + proximity * 0.5).toString();
+            vhsOverlay.style.filter = proximity > 0.05 ? `contrast(${(1 + proximity).toFixed(2)})` : '';
+        }
+
+        // Pulses a dark vignette (like the player's vision narrowing) at the exact moment
+        // the enemy spots the player during level 2's chase
+        let visionVignetteTimeout = null;
+        function triggerVisionVignette() {
+            const vignette = document.getElementById('vision-vignette');
+            if (!vignette) return;
+            vignette.style.opacity = '1';
+            clearTimeout(visionVignetteTimeout);
+            visionVignetteTimeout = setTimeout(() => {
+                vignette.style.opacity = '0';
+            }, 2500);
+        }
+
         function triggerWin() {
             monster.state = "DEAD";
             document.exitPointerLock();
             if (audioCtx && chaseGain) chaseGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            if (chaseAudioEl) chaseAudioEl.pause();
+            stopAmbientAudio();
             document.getElementById('win-screen').style.display = 'flex';
         }
 
         function resetGame() {
-            bricks.forEach(b => scene.remove(b));
+            collectibles.forEach(c => scene.remove(c));
             walls.forEach(w => scene.remove(w));
             if(monster.mesh) scene.remove(monster.mesh);
-            
-            bricks = [];
-            walls = [];
-            bricksCollected = 0;
-            document.getElementById('counter').innerText = `FORD KAS COLETADOS: 0 / 5`;
 
-            player.pos.set(4, 0.8, 4); 
+            collectibles = [];
+            walls = [];
+            collectiblesCollected = 0;
+            currentLevel = 1;
+            stopAmbientAudio();
+            clearTimeout(visionVignetteTimeout);
+            const vignette = document.getElementById('vision-vignette');
+            if (vignette) vignette.style.opacity = '0';
+
+            if (cachedWallMaterial) {
+                cachedWallMaterial.map = wallTexture;
+                cachedWallMaterial.needsUpdate = true;
+            }
+            scene.background = new THREE.Color('#1f1d13');
+            scene.fog.color = new THREE.Color('#1f1d13');
+            if (ambientLight) ambientLight.color = new THREE.Color('#444433');
+
+            player.pos.set(4, 0.8, 4);
             player.rot.set(0, 0, 0);
             player.stamina = 100;
             camera.rotation.set(0,0,0, 'YXZ');
-            const wallGeo = new THREE.BoxGeometry(cellSize, cellSize, cellSize);
-            const wallMat = new THREE.MeshStandardMaterial({ map: wallTexture, roughness: 0.8 });
-            for (let r = 0; r < gridSize; r++) {
-                for (let c = 0; c < gridSize; c++) {
-                    if (mapGrid[r] && mapGrid[r][c] === 1) {
-                        const wall = new THREE.Mesh(wallGeo, wallMat);
-                        wall.position.set(c * cellSize, cellSize / 2, r * cellSize);
-                        scene.add(wall);
-                        walls.push(wall);
-                    }
-                }
-            }
+            buildWalls(generateMaze());
 
-            spawnBricks();
+            spawnCollectibles();
+            document.getElementById('counter').innerText = `COLETADOS: 0 / ${totalCollectibles}`;
+            difficultyLevel = 1;
+            updateDifficulty();
             monster.state = "PATROL";
             setupMonster();
+            if (chaseAudioEl) {
+                chaseAudioEl.src = LEVEL1_MONSTER_AUDIO_URL;
+                chaseAudioEl.load();
+                chaseAudioEl.play();
+            }
 
             document.getElementById('gameover-screen').style.display = 'none';
             document.getElementById('win-screen').style.display = 'none';
