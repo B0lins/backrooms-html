@@ -63,6 +63,30 @@
             opacity: 0;
             transition: opacity 0.6s ease;
         }
+        /* Pensamento interior - aparece ao clicar em "Tentar Novamente", como se viesse da mente do jogador */
+        #inner-thought {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            z-index: 25;
+            color: #e0d0a0;
+            font-size: 28px;
+            font-style: italic;
+            text-shadow: 2px 2px 6px #000;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 1.5s ease;
+        }
+        #inner-thought.visible {
+            opacity: 1;
+            animation: innerThoughtShake 0.15s infinite;
+        }
+        @keyframes innerThoughtShake {
+            0%, 100% { transform: translate(-50%, -50%) rotate(0deg); }
+            25% { transform: translate(calc(-50% + 1px), calc(-50% - 1px)) rotate(-0.4deg); }
+            50% { transform: translate(calc(-50% - 1px), calc(-50% + 1px)) rotate(0.4deg); }
+            75% { transform: translate(calc(-50% + 1px), calc(-50% + 1px)) rotate(-0.3deg); }
+        }
         /* HUD do Jogador */
         #hud {
             position: absolute;
@@ -175,6 +199,7 @@
 
     <div id="vhs-overlay"></div>
     <div id="vision-vignette"></div>
+    <div id="inner-thought"></div>
     <div id="canvas-container"></div>
 
     <div id="hud">
@@ -197,35 +222,13 @@
 
     <div id="gameover-screen" class="screen">
         <h1 style="color: #ff3333; text-shadow: 3px 3px #330000;">VOCÊ FOI PEGO</h1>
-        <p>A entidade consumiu sua consciência. Você agora faz parte do grupo da UFU.</p>
+        <p>A entidade consumiu sua consciência. Você agora faz parte deste lugar.</p>
         <button id="btn-restart-death">TENTAR NOVAMENTE</button>
     </div>
 
     <div id="win-screen" class="screen">
         <h1 style="color: #33ff33; text-shadow: 3px 3px #003300;">VOCÊ ESCAPOU!</h1>
-        <p>Incrível! Você coletou todos os ford kas e entrou no diretório acadêmico da UFU.</br>
-            </br>
-           Creditos:</br>
-           Guti - CEO e Criador</br>
-           Mauricio - CTO</br>
-           R - Diretor Criativo/QA Tester</br>
-           Be - Diretora de Arte/Som</br>
-           Anne - RH</br>
-           Punhetinha - UX Tester</br>
-           Gilbertinho Pitbul - Ator (Inimigo principal)</br>
-           Ford Ka do Julio Macri - Figurante</br>
-           Alexis Texas - Dubladora</br>
-           Vasco da Gama - Diretor de Trilha Sonora</br>
-           </br>
-           Patrocinadores:</br>
-           Claude Code</br>
-           ChatGPT</br>
-           Backrooms O Filme</br>
-           Vasco da Gama</br>
-           Universidade Federal de Uberlandia</br>
-           Havan</br>
-           Associação Brasileira de Otorrinolaringologia</br>
-        </p>
+        <p>__WIN_SCREEN_TEXT__</p>
         <button id="btn-restart-win">JOGAR DE NOVO</button>
     </div>
 
@@ -246,6 +249,8 @@
         const LEVEL2_COLLECTIBLE_IMAGE_URL = "__LEVEL2_COLLECTIBLE_IMAGE_DATA_URI__";
         const LEVEL2_JUMPSCARE_AUDIO_URL = "__LEVEL2_JUMPSCARE_AUDIO_DATA_URI__";
         const LEVEL2_AMBIENT_AUDIO_URL = "__LEVEL2_AMBIENT_AUDIO_DATA_URI__";
+        const LEVEL1_HEARTBEAT_AUDIO_URL = "__LEVEL1_HEARTBEAT_AUDIO_DATA_URI__";
+        const LEVEL2_HEARTBEAT_AUDIO_URL = "__LEVEL2_HEARTBEAT_AUDIO_DATA_URI__";
 
         // ==========================================
         // GAME ENGINE GLOBAL SCOPE
@@ -257,10 +262,17 @@
         let walls = [];
         let collectibles = [];
         let collectiblesCollected = 0;
-        let totalCollectibles = __COLLECTIBLE_COUNT__;
+        const LEVEL1_COLLECTIBLE_COUNT = __COLLECTIBLE_COUNT__;
+        let totalCollectibles = LEVEL1_COLLECTIBLE_COUNT;
 
         // Which phase of the game is active: 1 (collect the items) or 2 (the final chase)
         let currentLevel = 1;
+
+        // Checkpoint: once the player reaches level 2 for the first time, dying and
+        // retrying skips most of level 1 instead of starting completely over
+        let reachedLevel2Before = false;
+        // Forces the passive heartbeat off regardless of difficulty (used by the checkpoint)
+        let heartbeatForcedSilent = false;
 
         // Minimap starts disabled; only toggles with the secret code w,w,s,s,a,d,a,d,space
         let minimapEnabled = false;
@@ -307,6 +319,11 @@
         const _dirToPlayer = new THREE.Vector3();
         const globalRaycaster = new THREE.Raycaster();
 
+        // Player movement constants (shared with startLevel2's speed guarantee)
+        const BASE_PLAYER_SPEED = 0.05;
+        const SPRINT_SPEED_MULTIPLIER = 1.8;
+        const EXHAUSTED_SPRINT_SPEED_FACTOR = 0.6;
+
         // Player state
         let player = {
             pos: new THREE.Vector3(4, 0.8, 4),
@@ -341,23 +358,27 @@
             pathTargetKey: null
         };
 
+        // Applies the enemy stats matching a given difficulty level (1 = easiest, 10 = hardest)
+        function applyDifficultyStats(level) {
+            let t = (level - 1) / (MAX_DIFFICULTY_LEVEL - 1);
+            monster.chaseSpeedMultiplier = 1.4 + (2.4 - 1.4) * t;
+            monster.chaseRadius = 10 + (22 - 10) * t;
+            monster.lostSightThreshold = 3 + (10 - 3) * t;
+        }
+
         // Recomputes difficultyLevel from collection progress (0 collected -> level 1,
         // last collectible -> PHASE_ONE_MAX_DIFFICULTY_LEVEL) and applies it to the enemy's stats.
         function updateDifficulty() {
             let progress = totalCollectibles > 0 ? collectiblesCollected / totalCollectibles : 0;
             difficultyLevel = 1 + Math.floor(progress * (PHASE_ONE_MAX_DIFFICULTY_LEVEL - 1));
-
-            // t goes from 0 (level 1, easiest) to 1 (level MAX_DIFFICULTY_LEVEL, hardest)
-            let t = (difficultyLevel - 1) / (MAX_DIFFICULTY_LEVEL - 1);
-            monster.chaseSpeedMultiplier = 1.4 + (2.4 - 1.4) * t;
-            monster.chaseRadius = 10 + (22 - 10) * t;
-            monster.lostSightThreshold = 3 + (10 - 3) * t;
+            applyDifficultyStats(difficultyLevel);
         }
 
         // Sound effects / Web Audio API
         let audioCtx = null;
         let humOsc = null, humGain = null;
         let chaseAudioEl = null, chaseGain = null;
+        let heartbeatAudioEl = null, heartbeatGain = null;
         let ambientAudioEl = null; // level 2's continuous background soundtrack
         let lastFootstepTime = 0;
 
@@ -527,6 +548,15 @@
             chaseSource.connect(chaseGain);
             chaseGain.connect(audioCtx.destination);
             chaseAudioEl.play();
+
+            heartbeatAudioEl = new Audio(LEVEL1_HEARTBEAT_AUDIO_URL);
+            heartbeatAudioEl.loop = true;
+            let heartbeatSource = audioCtx.createMediaElementSource(heartbeatAudioEl);
+            heartbeatGain = audioCtx.createGain();
+            heartbeatGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            heartbeatSource.connect(heartbeatGain);
+            heartbeatGain.connect(audioCtx.destination);
+            heartbeatAudioEl.play();
         }
 
         function playFootstep() {
@@ -561,6 +591,25 @@
             gain.connect(audioCtx.destination);
             osc.start();
             osc.stop(audioCtx.currentTime + 0.31);
+        }
+
+        // Simple rising major arpeggio, played once the player finishes the whole game
+        function playVictorySound() {
+            if (!audioCtx) return;
+            const notes = [523.25, 659.25, 783.99, 1046.5]; // C5, E5, G5, C6
+            notes.forEach((freq, i) => {
+                let osc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                let startTime = audioCtx.currentTime + i * 0.12;
+                osc.frequency.setValueAtTime(freq, startTime);
+                gain.gain.setValueAtTime(0.25, startTime);
+                gain.gain.linearRampToValueAtTime(0.01, startTime + 0.5);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(startTime);
+                osc.stop(startTime + 0.5);
+            });
         }
 
         function playChaseGlitchSound() {
@@ -671,6 +720,46 @@
             } else {
                 chaseGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.5);
             }
+        }
+
+        // ==========================================
+        // HEARTBEAT (warns the player the enemy is near)
+        // ==========================================
+        const HEARTBEAT_MAX_RADIUS = 20;
+
+        // How far away the passive heartbeat (outside of a chase) can be heard. Shrinks as the
+        // player collects items during level 1, reaching total silence on the last collectible;
+        // level 2 always uses a fixed medium radius (equivalent to 3 collectibles collected).
+        // Forced to zero during the level-2-death checkpoint, regardless of difficulty.
+        function getPassiveHeartbeatRadius() {
+            if (heartbeatForcedSilent) return 0;
+            if (currentLevel === 2) {
+                return HEARTBEAT_MAX_RADIUS * 0.5;
+            }
+            let t = (difficultyLevel - 1) / (PHASE_ONE_MAX_DIFFICULTY_LEVEL - 1);
+            return HEARTBEAT_MAX_RADIUS * (1 - t);
+        }
+
+        // Continuously adjusts the looping heartbeat track's volume. During a chase it just
+        // stays loud and constant until the chase ends; outside of a chase it scales with
+        // proximity (silent when out of range, louder the closer the enemy gets).
+        function updateHeartbeat(dist, isChase) {
+            if (!audioCtx || !heartbeatGain) return;
+
+            if (isChase) {
+                heartbeatGain.gain.setTargetAtTime(0.7, audioCtx.currentTime, 0.1);
+                return;
+            }
+
+            let audibleRadius = getPassiveHeartbeatRadius();
+            if (audibleRadius <= 0 || dist >= audibleRadius) {
+                heartbeatGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.3);
+                return;
+            }
+
+            let proximity = 1 - (dist / audibleRadius); // 0 (na borda do alcance) a 1 (bem perto)
+            let volume = 0.1 + proximity * 0.6;
+            heartbeatGain.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.2);
         }
 
         // ==========================================
@@ -895,7 +984,10 @@
                 player.rot.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, player.rot.x));
                 camera.rotation.set(player.rot.x, player.rot.y, 0, 'YXZ');
             });
-            document.getElementById('btn-restart-death').addEventListener('click', resetGame);
+            document.getElementById('btn-restart-death').addEventListener('click', () => {
+                showInnerThought();
+                resetGame();
+            });
             document.getElementById('btn-restart-win').addEventListener('click', resetGame);
         }
 
@@ -1133,6 +1225,7 @@
 
             monster.mesh.position.copy(monster.pos);
             updateMonsterAudio(distToPlayer, monster.state === "CHASE");
+            updateHeartbeat(distToPlayer, monster.state === "CHASE");
             if (distToPlayer < 0.8) {
                 triggerJumpscare();
             }
@@ -1148,6 +1241,33 @@
             }
         }
 
+        let jumpscareAudioEl = null;
+        function stopJumpscareAudio() {
+            if (jumpscareAudioEl) {
+                jumpscareAudioEl.pause();
+                jumpscareAudioEl = null;
+            }
+        }
+
+        // Random intrusive thought shown right when the player clicks to respawn - fades in,
+        // trembles slightly, then fades out, as if it came from the player's own mind
+        const innerThoughts = [
+            "Preciso sair daqui...",
+            "Era só um pesadelo?",
+            "O que era aquilo..."
+        ];
+        let innerThoughtTimeout = null;
+        function showInnerThought() {
+            const el = document.getElementById('inner-thought');
+            if (!el) return;
+            el.textContent = innerThoughts[Math.floor(Math.random() * innerThoughts.length)];
+            el.classList.add('visible');
+            clearTimeout(innerThoughtTimeout);
+            innerThoughtTimeout = setTimeout(() => {
+                el.classList.remove('visible');
+            }, 2800);
+        }
+
         function triggerJumpscare() {
             monster.state = "DEAD";
             document.exitPointerLock();
@@ -1156,9 +1276,12 @@
             let jumpscareImageUrl = currentLevel === 2 ? LEVEL2_MONSTER_IMAGE_URL : LEVEL1_MONSTER_IMAGE_URL;
 
             playJumpscareSound();
-            new Audio(jumpscareAudioUrl).play();
+            jumpscareAudioEl = new Audio(jumpscareAudioUrl);
+            jumpscareAudioEl.play();
             if (audioCtx && chaseGain) chaseGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            if (audioCtx && heartbeatGain) heartbeatGain.gain.setValueAtTime(0, audioCtx.currentTime);
             if (chaseAudioEl) chaseAudioEl.pause();
+            if (heartbeatAudioEl) heartbeatAudioEl.pause();
             stopAmbientAudio();
 
             const jsScreen = document.getElementById('jumpscare-screen');
@@ -1182,13 +1305,11 @@
 
             if (document.pointerLockElement === document.body && monster.state !== "DEAD") {
 
-                let basePlayerSpeed = 0.05;
-                let sprintPlayerSpeedMultiplier = 1.8;
-                let currentMaxSpeed = basePlayerSpeed;
+                let currentMaxSpeed = BASE_PLAYER_SPEED;
                 let isMoving = moveForward || moveBackward || moveLeft || moveRight;
 
                 if (isSprinting && isMoving && player.stamina > 0) {
-                    currentMaxSpeed = basePlayerSpeed * sprintPlayerSpeedMultiplier;
+                    currentMaxSpeed = BASE_PLAYER_SPEED * SPRINT_SPEED_MULTIPLIER;
                     player.stamina -= delta * 35;
                     if (player.stamina < 0) player.stamina = 0;
                 } else {
@@ -1197,7 +1318,7 @@
                         if (player.stamina > 100) player.stamina = 100;
                     }
                     if (player.stamina < 15 && isSprinting) {
-                        currentMaxSpeed = basePlayerSpeed * 0.6;
+                        currentMaxSpeed = BASE_PLAYER_SPEED * EXHAUSTED_SPRINT_SPEED_FACTOR;
                     }
                 }
                 document.getElementById('stamina-bar').style.width = player.stamina + '%';
@@ -1252,6 +1373,7 @@
                             if (currentLevel === 1) {
                                 startLevel2();
                             } else {
+                                relocateMonsterNearPlayer();
                                 triggerWin();
                             }
                         }
@@ -1279,6 +1401,8 @@
         // single collectible as far away from the player as the maze allows.
         function startLevel2() {
             currentLevel = 2;
+            reachedLevel2Before = true;
+            heartbeatForcedSilent = false;
             collectiblesCollected = 0;
             totalCollectibles = 1;
             document.getElementById('counter').innerText = `COLETADOS: 0 / ${totalCollectibles}`;
@@ -1295,7 +1419,18 @@
             // The final enemy is a bit faster than whatever chase speed level 1 ended on
             monster.chaseSpeedMultiplier *= 1.2;
 
+            // Guarantee: even if the player keeps sprinting with no stamina left, the enemy
+            // must still be slightly faster during a chase - not just faster on paper
+            let exhaustedSprintSpeed = BASE_PLAYER_SPEED * EXHAUSTED_SPRINT_SPEED_FACTOR;
+            let minChaseSpeed = exhaustedSprintSpeed * 1.15;
+            if (monster.speed * monster.chaseSpeedMultiplier < minChaseSpeed) {
+                monster.chaseSpeedMultiplier = minChaseSpeed / monster.speed;
+            }
+
             monster.mesh.material = getOrCreateMonsterMaterial(currentLevel);
+
+            // Respawn the enemy at a medium distance right as level 2 begins
+            relocateMonsterNearPlayer();
 
             if (chaseAudioEl) {
                 chaseAudioEl.pause();
@@ -1308,6 +1443,13 @@
             ambientAudioEl.loop = true;
             ambientAudioEl.volume = 0.5;
             ambientAudioEl.play();
+
+            if (heartbeatAudioEl) {
+                heartbeatAudioEl.pause();
+                heartbeatAudioEl.src = LEVEL2_HEARTBEAT_AUDIO_URL;
+                heartbeatAudioEl.load();
+                heartbeatAudioEl.play();
+            }
 
             spawnFarthestCollectible();
         }
@@ -1345,8 +1487,11 @@
             monster.state = "DEAD";
             document.exitPointerLock();
             if (audioCtx && chaseGain) chaseGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            if (audioCtx && heartbeatGain) heartbeatGain.gain.setValueAtTime(0, audioCtx.currentTime);
             if (chaseAudioEl) chaseAudioEl.pause();
+            if (heartbeatAudioEl) heartbeatAudioEl.pause();
             stopAmbientAudio();
+            playVictorySound();
             document.getElementById('win-screen').style.display = 'flex';
         }
 
@@ -1360,6 +1505,7 @@
             collectiblesCollected = 0;
             currentLevel = 1;
             stopAmbientAudio();
+            stopJumpscareAudio();
             clearTimeout(visionVignetteTimeout);
             const vignette = document.getElementById('vision-vignette');
             if (vignette) vignette.style.opacity = '0';
@@ -1378,16 +1524,34 @@
             camera.rotation.set(0,0,0, 'YXZ');
             buildWalls(generateMaze());
 
+            if (reachedLevel2Before) {
+                // Checkpoint: the player already reached level 2 once, so they come back
+                // almost there (just 1 collectible away) with the enemy nearly at level 1's
+                // hardest, but with the passive heartbeat forced off
+                totalCollectibles = 1;
+                difficultyLevel = 4;
+                applyDifficultyStats(4);
+                heartbeatForcedSilent = true;
+            } else {
+                totalCollectibles = LEVEL1_COLLECTIBLE_COUNT;
+                difficultyLevel = 1;
+                heartbeatForcedSilent = false;
+                updateDifficulty();
+            }
+
             spawnCollectibles();
             document.getElementById('counter').innerText = `COLETADOS: 0 / ${totalCollectibles}`;
-            difficultyLevel = 1;
-            updateDifficulty();
             monster.state = "PATROL";
             setupMonster();
             if (chaseAudioEl) {
                 chaseAudioEl.src = LEVEL1_MONSTER_AUDIO_URL;
                 chaseAudioEl.load();
                 chaseAudioEl.play();
+            }
+            if (heartbeatAudioEl) {
+                heartbeatAudioEl.src = LEVEL1_HEARTBEAT_AUDIO_URL;
+                heartbeatAudioEl.load();
+                heartbeatAudioEl.play();
             }
 
             document.getElementById('gameover-screen').style.display = 'none';
