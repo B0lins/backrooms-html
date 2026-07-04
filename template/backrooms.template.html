@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bloco de arquitetura - UNAERP</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            margin: 0;
+            padding: 0;
+        }
+        body, html {
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        /* Filtro VHS / Efeito de Câmera Antiga */
+        #vhs-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 5;
+            pointer-events: none;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 4px, 6px 100%;
+            opacity: 0.85;
+            animation: pulse Noise 0.2s infinite;
+        }
+        #vhs-overlay::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0; left: 0; bottom: 0; right: 0;
+            background: rgba(18, 16, 16, 0.1);
+            opacity: 0;
+            z-index: 6;
+            pointer-events: none;
+        }
+        /* HUD do Jogador */
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            color: #e0d0a0;
+            text-shadow: 2px 2px 4px #000;
+        }
+        #counter {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        #stamina-container {
+            width: 200px;
+            height: 15px;
+            background: rgba(50, 50, 50, 0.5);
+            border: 2px solid #e0d0a0;
+            padding: 1px;
+        }
+        #minimap {
+            margin-top: 15px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 2px solid #e0d0a0;
+            display: none;
+        }
+        #stamina-bar {
+            width: 100%;
+            height: 100%;
+            background: #ccaa44;
+            transition: width 0.1s linear;
+        }
+        .rec-indicator {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            color: red;
+            font-weight: bold;
+            font-size: 20px;
+            z-index: 10;
+            animation: blink 1s infinite;
+        }
+        /* Telas de Menu/Interface */
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(10, 10, 8, 0.95);
+            color: #e0d0a0;
+            text-align: center;
+            padding: 20px;
+        }
+        h1 {
+            font-size: 45px;
+            margin-bottom: 20px;
+            color: #cccc55;
+            text-shadow: 3px 3px #333311;
+        }
+        p {
+            font-size: 18px;
+            margin-bottom: 30px;
+            max-width: 600px;
+            line-height: 1.6;
+        }
+        button {
+            background: #222211;
+            color: #e0d0a0;
+            border: 2px solid #e0d0a0;
+            padding: 12px 30px;
+            font-size: 20px;
+            font-family: 'Courier New', Courier, monospace;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button:hover {
+            background: #e0d0a0;
+            color: #222211;
+        }
+        #gameover-screen, #win-screen, #jumpscare-screen {
+            display: none;
+        }
+        #jumpscare-screen {
+            z-index: 30;
+            background: #000;
+            justify-content: center;
+            align-items: center;
+        }
+        #jumpscare-img {
+            max-width: 90%;
+            max-height: 90%;
+            object-fit: contain;
+        }
+        /* Animações */
+        @keyframes blink {
+            0%, 49% { opacity: 1; }
+            50%, 100% { opacity: 0; }
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="vhs-overlay"></div>
+    <div id="canvas-container"></div>
+
+    <div id="hud">
+        <div id="counter">TIJOLOS COLETADOS: 0 / 5</div>
+        <div id="stamina-container">
+            <div id="stamina-bar"></div>
+        </div>
+        <canvas id="minimap" width="180" height="180"></canvas>
+    </div>
+    <div class="rec-indicator">● REC</div>
+
+    <div id="start-screen" class="screen">
+    <h1>UNIVERSIDADE FEDERAL DE UBERLÂNDIA</h1>
+        <p>Você caiu em um labirinto infinito de salas vazias com cheiro de carpete úmido.
+           Para escapar deste pesadelo, colete os  <b>FORD KAS</b> vermelhos espalhados.
+           Mas cuidado... algo se esconde no gesso amarelo.</p>
+        <p><b>Controles:</b><br>Clique na tela para travar o mouse (Olhar ao redor)<br>WASD - Movimentação | SHIFT - Correr</p>
+        <button id="btn-start">ENTRAR NAS BACKROOMS</button>
+    </div>
+
+    <div id="gameover-screen" class="screen">
+        <h1 style="color: #ff3333; text-shadow: 3px 3px #330000;">VOCÊ FOI PEGO</h1>
+        <p>A entidade consumiu sua consciência. Você agora faz parte do grupo da UFU.</p>
+        <button id="btn-restart-death">TENTAR NOVAMENTE</button>
+    </div>
+
+    <div id="win-screen" class="screen">
+        <h1 style="color: #33ff33; text-shadow: 3px 3px #003300;">VOCÊ ESCAPOU!</h1>
+        <p>Incrível! Você coletou todos os ford kas e entrou no diretório acadêmico da UFU.</br>
+            </br>
+           Creditos:</br>
+           Guti - CEO e Criador</br>
+           Mauricio - CTO</br>
+           R - Diretor Criativo/QA Tester</br>
+           Be - Diretora de Arte/Som</br>
+           Anne - RH</br>
+           Punhetinha - UX Tester</br>
+           Gilbertinho Pitbul - Ator (Inimigo principal)</br>
+           Ford Ka do Julio Macri - Figurante</br>
+           Alexis Texas - Dubladora</br>
+           Vasco da Gama - Diretor de Trilha Sonora</br>
+           </br>
+           Patrocinadores:</br>
+           Claude Code</br>
+           ChatGPT</br>
+           Backrooms O Filme</br>
+           Vasco da Gama</br>
+           Universidade Federal de Uberlandia</br>
+           Havan</br>
+           Associação Brasileira de Otorrinolaringologia</br>
+        </p>
+        <button id="btn-restart-win">JOGAR DE NOVO</button>
+    </div>
+
+    <div id="jumpscare-screen" class="screen">
+        <img id="jumpscare-img" src="" alt="JUMPSCARE">
+    </div>
+
+    <script>
+        // ==========================================
+        // COLE O SEU CÓDIGO GIGANTE BASE64 AQUI DENTRO DAS ASPAS:
+        // ==========================================
+        const MONSTER_IMAGE_URL = "__VILLAIN_IMAGE_DATA_URI__";
+        // ==========================================
+        // ESCOPO GLOBAL DO MOTOR DO JOGO
+        // ==========================================
+        let scene, camera, renderer, clock;
+        let mapGrid = [];
+        const gridSize = 20; 
+        const cellSize = 4;  
+        let walls = [];
+        let bricks = [];
+        let bricksCollected = 0;
+        let totalBricks = 8;
+
+        // Minimapa comeca desativado; so liga com o codigo secreto w,w,s,s,a,d,a,d,space
+        let minimapEnabled = false;
+        const minimapCheatCode = ['KeyW', 'KeyW', 'KeyS', 'KeyS', 'KeyA', 'KeyD', 'KeyA', 'KeyD', 'Space'];
+        let minimapCheatProgress = [];
+        function checkMinimapCheatCode(code) {
+            minimapCheatProgress.push(code);
+            if (minimapCheatProgress.length > minimapCheatCode.length) {
+                minimapCheatProgress.shift();
+            }
+            if (minimapCheatProgress.join(',') === minimapCheatCode.join(',')) {
+                minimapEnabled = !minimapEnabled;
+                const canvas = document.getElementById('minimap');
+                if (canvas) canvas.style.display = minimapEnabled ? 'block' : 'none';
+                minimapCheatProgress = [];
+            }
+        }
+
+        // Otimização de Memória (Evitando travamentos)
+        const upAxis = new THREE.Vector3(0, 1, 0);
+        const _moveVector = new THREE.Vector3();
+        const _forwardMat = new THREE.Vector3();
+        const _rightMat = new THREE.Vector3();
+        const _dirToPlayer = new THREE.Vector3();
+        const globalRaycaster = new THREE.Raycaster();
+
+        // Estado do Jogador
+        let player = {
+            pos: new THREE.Vector3(4, 0.8, 4), 
+            rot: new THREE.Vector3(),
+            speed: 0.05,
+            stamina: 1.8,
+            radius: 0.6 
+        };
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false, isSprinting = false;
+
+        // Estado do Monstro
+        let monster = {
+            mesh: null,
+            pos: new THREE.Vector3(),
+            speed: 0.03, 
+            chaseSpeedMultiplier: 2.2, 
+            state: "PATROL", 
+            patrolTarget: new THREE.Vector3(),
+            lostTimer: 0,
+            stuckTimer: 0,
+            encounterTimer: 0,
+            chaseRadius: 18 
+        };
+
+        // Efeitos Sonoros / Web Audio API
+        let audioCtx = null;
+        let humOsc = null, humGain = null;
+        const MONSTER_AUDIO_URL = "__CHASE_AUDIO_DATA_URI__";
+        let chaseAudioEl = null, chaseGain = null;
+        let lastFootstepTime = 0;
+
+        // Texturas procedurais geradas via Canvas HTML
+        let wallTexture, floorTexture, ceilingTexture, monsterTexture;
+
+        // ==========================================
+        // GERADORES PROCEDURAIS DE TEXTURA
+        // ==========================================
+        function createProceduralTextures() {
+            let canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 256;
+            let ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ccbe73'; ctx.fillRect(0, 0, 256, 256);
+            for (let i = 0; i < 5000; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? '#bdae62' : '#d6c883';
+                ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+            }
+            wallTexture = new THREE.CanvasTexture(canvas);
+            wallTexture.wrapS = THREE.RepeatWrapping; wallTexture.wrapT = THREE.RepeatWrapping;
+            wallTexture.repeat.set(1, 1);
+
+            canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 128;
+            ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#a68a56'; ctx.fillRect(0, 0, 128, 128);
+            for (let i = 0; i < 3000; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? '#947a49' : '#b59b67';
+                ctx.fillRect(Math.random() * 128, Math.random() * 128, 1, 1);
+            }
+            floorTexture = new THREE.CanvasTexture(canvas);
+            floorTexture.wrapS = THREE.RepeatWrapping; floorTexture.wrapT = THREE.RepeatWrapping;
+            floorTexture.repeat.set(10, 10);
+
+            canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 256;
+            ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#e3ded2'; ctx.fillRect(0, 0, 256, 256);
+            ctx.strokeStyle = '#c2bdb1'; ctx.lineWidth = 2;
+            ctx.strokeRect(0, 0, 256, 256);
+            ctx.fillStyle = '#fffff0'; ctx.fillRect(64, 64, 128, 128);
+            ctx.lineWidth = 4; ctx.strokeStyle = '#aaaa99'; ctx.strokeRect(64, 64, 128, 128);
+            ceilingTexture = new THREE.CanvasTexture(canvas);
+            ceilingTexture.wrapS = THREE.RepeatWrapping; ceilingTexture.wrapT = THREE.RepeatWrapping;
+            ceilingTexture.repeat.set(8, 8);
+        }
+
+        // Gerador procedural de labirinto (Prim randomizado - cria varias bifurcacoes,
+        // ao contrario do recursive backtracker que tende a formar corredores longos e unicos)
+        function generateMaze() {
+            let grid = [];
+            for (let r = 0; r < gridSize; r++) {
+                grid[r] = new Array(gridSize).fill(1);
+            }
+
+            const roomCoords = [];
+            for (let i = 1; i < gridSize - 1; i += 2) roomCoords.push(i);
+            const isRoom = (v) => roomCoords.includes(v);
+
+            const visited = new Set();
+            const key = (r, c) => r + ',' + c;
+
+            function neighborsOf(r, c) {
+                return [[-2,0],[2,0],[0,-2],[0,2]]
+                    .map(([dr, dc]) => [r + dr, c + dc, dr, dc])
+                    .filter(([nr, nc]) => isRoom(nr) && isRoom(nc));
+            }
+
+            const startR = roomCoords[Math.floor(Math.random() * roomCoords.length)];
+            const startC = roomCoords[Math.floor(Math.random() * roomCoords.length)];
+            grid[startR][startC] = 0;
+            visited.add(key(startR, startC));
+
+            let frontier = [];
+            function addFrontier(r, c) {
+                for (const [nr, nc, dr, dc] of neighborsOf(r, c)) {
+                    if (!visited.has(key(nr, nc))) {
+                        frontier.push([r, c, nr, nc, dr, dc]);
+                    }
+                }
+            }
+            addFrontier(startR, startC);
+
+            while (frontier.length > 0) {
+                const idx = Math.floor(Math.random() * frontier.length);
+                const [r, c, nr, nc, dr, dc] = frontier[idx];
+                frontier.splice(idx, 1);
+                if (visited.has(key(nr, nc))) continue;
+
+                grid[r + dr / 2][c + dc / 2] = 0;
+                grid[nr][nc] = 0;
+                visited.add(key(nr, nc));
+                addFrontier(nr, nc);
+            }
+
+            return grid;
+        }
+
+        // ==========================================
+        // SINTETIZADOR DE ÁUDIO PROCEDURAL
+        // ==========================================
+        function initAudio() {
+            if (audioCtx) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+            humOsc = audioCtx.createOscillator();
+            humGain = audioCtx.createGain();
+            humOsc.type = 'sawtooth';
+            humOsc.frequency.setValueAtTime(60, audioCtx.currentTime);
+            let lowpass = audioCtx.createBiquadFilter();
+            lowpass.type = 'lowpass';
+            lowpass.frequency.setValueAtTime(150, audioCtx.currentTime);
+
+            humGain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+            
+            humOsc.connect(lowpass);
+            lowpass.connect(humGain);
+            humGain.connect(audioCtx.destination);
+            humOsc.start();
+
+            chaseAudioEl = new Audio(MONSTER_AUDIO_URL);
+            chaseAudioEl.loop = true;
+            let chaseSource = audioCtx.createMediaElementSource(chaseAudioEl);
+            chaseGain = audioCtx.createGain();
+            chaseGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            chaseSource.connect(chaseGain);
+            chaseGain.connect(audioCtx.destination);
+            chaseAudioEl.play();
+        }
+
+        function playFootstep() {
+            if (!audioCtx) return;
+            let osc = audioCtx.createOscillator();
+            let gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(120, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.12);
+            
+            gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+            
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.13);
+        }
+
+        function playCollectSound() {
+            if (!audioCtx) return;
+            let osc = audioCtx.createOscillator();
+            let gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); 
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08); 
+            
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.31);
+        }
+
+        function playChaseGlitchSound() {
+            if (!audioCtx) return;
+            const duration = 0.4;
+            const bufferSize = Math.floor(audioCtx.sampleRate * duration);
+            const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                output[i] = Math.random() * 2 - 1;
+            }
+            const noise = audioCtx.createBufferSource();
+            noise.buffer = noiseBuffer;
+
+            const bandpass = audioCtx.createBiquadFilter();
+            bandpass.type = 'bandpass';
+            bandpass.frequency.setValueAtTime(2800, audioCtx.currentTime);
+            bandpass.Q.setValueAtTime(0.7, audioCtx.currentTime);
+
+            const glitchGain = audioCtx.createGain();
+            glitchGain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            glitchGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+            noise.connect(bandpass);
+            bandpass.connect(glitchGain);
+            glitchGain.connect(audioCtx.destination);
+            noise.start();
+            noise.stop(audioCtx.currentTime + duration);
+        }
+
+        function playJumpscareSound() {
+            if (!audioCtx) return;
+            for(let i=0; i<3; i++) {
+                let osc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                osc.type = i % 2 === 0 ? 'sawtooth' : 'square';
+                osc.frequency.setValueAtTime(2000 + (i * 350), audioCtx.currentTime);
+                osc.frequency.linearRampToValueAtTime(100, audioCtx.currentTime + 1.5);
+                
+                gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 1.5);
+                
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 1.5);
+            }
+        }
+
+        // ==========================================
+        // MINIMAPA DE DEBUG (labirinto, jogador, inimigo, Ford Kas)
+        // ==========================================
+        function drawMinimap() {
+            if (!minimapEnabled) return; // minimapa desativado ate o codigo secreto ser digitado
+            const canvas = document.getElementById('minimap');
+            if (!canvas) return; // canvas ainda nao existe no DOM
+            const ctx = canvas.getContext('2d');
+            const scale = canvas.width / gridSize; // pixels do canvas por celula do grid
+
+            // Fundo preto do minimapa
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Paredes do labirinto (cinza) - varre o mapGrid inteiro
+            ctx.fillStyle = '#888';
+            for (let r = 0; r < gridSize; r++) {
+                for (let c = 0; c < gridSize; c++) {
+                    if (mapGrid[r] && mapGrid[r][c] === 1) {
+                        ctx.fillRect(c * scale, r * scale, scale, scale);
+                    }
+                }
+            }
+
+            // Ford Kas restantes no mapa (vermelho)
+            ctx.fillStyle = '#ff3333';
+            for (const brick of bricks) {
+                // Converte posicao 3D (x, z) do mundo para coordenada de celula e depois para pixel do minimapa
+                let bc = (brick.position.x / cellSize) * scale;
+                let br = (brick.position.z / cellSize) * scale;
+                ctx.beginPath();
+                ctx.arc(bc, br, scale * 0.35, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Inimigo: amarelo em patrulha, magenta quando esta em perseguicao
+            if (monster.mesh) {
+                let mc = (monster.pos.x / cellSize) * scale;
+                let mr = (monster.pos.z / cellSize) * scale;
+                ctx.fillStyle = monster.state === "CHASE" ? '#ff00ff' : '#ffff00';
+                ctx.beginPath();
+                ctx.arc(mc, mr, scale * 0.45, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Jogador (verde) - desenhado por ultimo para ficar sempre visivel por cima dos outros pontos
+            let pc = (player.pos.x / cellSize) * scale;
+            let pr = (player.pos.z / cellSize) * scale;
+            ctx.fillStyle = '#33ff33';
+            ctx.beginPath();
+            ctx.arc(pc, pr, scale * 0.45, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function updateMonsterAudio(dist, isChase) {
+            if (!audioCtx || !chaseGain) return;
+            if (isChase) {
+                chaseGain.gain.setTargetAtTime(0.6, audioCtx.currentTime, 0.1);
+            } else {
+                chaseGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.5);
+            }
+        }
+
+        // ==========================================
+        // INICIALIZAÇÃO DO MUNDO 3D
+        // ==========================================
+        function init() {
+            clock = new THREE.Clock();
+            createProceduralTextures();
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color('#1f1d13');
+            scene.fog = new THREE.FogExp2('#1f1d13', 0.15);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.rotation.order = 'YXZ';
+            camera.position.copy(player.pos);
+            renderer = new THREE.WebGLRenderer({ antialias: false }); // Antialias false ajuda na performance
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight('#444433', 1.2);
+            scene.add(ambientLight);
+            const flashlight = new THREE.PointLight('#fffaed', 1.5, 8);
+            camera.add(flashlight);
+            scene.add(camera);
+
+            const mazeData = generateMaze();
+            const wallGeo = new THREE.BoxGeometry(cellSize, cellSize, cellSize);
+            const wallMat = new THREE.MeshStandardMaterial({ map: wallTexture, roughness: 0.8 });
+            for (let r = 0; r < gridSize; r++) {
+                mapGrid[r] = [];
+                for (let c = 0; c < gridSize; c++) {
+                    mapGrid[r][c] = mazeData[r][c];
+                    if (mazeData[r][c] === 1) {
+                        const wall = new THREE.Mesh(wallGeo, wallMat);
+                        wall.position.set(c * cellSize, cellSize / 2, r * cellSize);
+                        scene.add(wall);
+                        walls.push(wall);
+                    }
+                }
+            }
+
+            const floorGeo = new THREE.PlaneGeometry(gridSize * cellSize, gridSize * cellSize);
+            const floorMat = new THREE.MeshStandardMaterial({ map: floorTexture, roughness: 0.9 });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.set((gridSize * cellSize)/2 - cellSize/2, 0, (gridSize * cellSize)/2 - cellSize/2);
+            scene.add(floor);
+            const ceilingMat = new THREE.MeshStandardMaterial({ map: ceilingTexture, roughness: 0.5 });
+            const ceiling = new THREE.Mesh(floorGeo, ceilingMat);
+            ceiling.rotation.x = Math.PI / 2;
+            ceiling.position.set((gridSize * cellSize)/2 - cellSize/2, cellSize, (gridSize * cellSize)/2 - cellSize/2);
+            scene.add(ceiling);
+
+            spawnBricks();
+            setupMonster();
+            window.addEventListener('resize', onWindowResize, false);
+            setupControls();
+        }
+
+        const BRICK_IMAGE_URL = "__COLLECTIBLE_IMAGE_DATA_URI__";
+        function spawnBricks() {
+            let brickTexLoader = new THREE.TextureLoader();
+            let brickTexture = brickTexLoader.load(BRICK_IMAGE_URL);
+            const brickMat = new THREE.SpriteMaterial({ map: brickTexture });
+            
+            let emptyCells = [];
+            for (let r = 1; r < gridSize - 1; r++) {
+                for (let c = 1; c < gridSize - 1; c++) {
+                    if (mapGrid[r] && mapGrid[r][c] === 0 && !(r < 3 && c < 3)) { 
+                        emptyCells.push({ r, c });
+                    }
+                }
+            }
+
+            // Espalhamento maximo (farthest-point): cada novo Ford Ka e o mais distante
+            // possivel dos ja escolhidos, garantindo que nunca fiquem proximos
+            let chosenCells = [];
+            if (emptyCells.length > 0) {
+                chosenCells.push(emptyCells[Math.floor(Math.random() * emptyCells.length)]);
+                while (chosenCells.length < totalBricks && chosenCells.length < emptyCells.length) {
+                    let best = null;
+                    let bestDist = -1;
+                    for (const cell of emptyCells) {
+                        if (chosenCells.includes(cell)) continue;
+                        let minDist = Math.min(...chosenCells.map(sel =>
+                            Math.abs(sel.r - cell.r) + Math.abs(sel.c - cell.c)
+                        ));
+                        if (minDist > bestDist) {
+                            bestDist = minDist;
+                            best = cell;
+                        }
+                    }
+                    if (best) chosenCells.push(best);
+                }
+            }
+            totalBricks = chosenCells.length;
+
+            for (const cell of chosenCells) {
+                let mesh = new THREE.Sprite(brickMat);
+                mesh.scale.set(0.5, 0.5, 1);
+                let x = cell.c * cellSize;
+                let z = cell.r * cellSize;
+                mesh.position.set(x, 0.3, z);
+                scene.add(mesh);
+                bricks.push(mesh);
+            }
+        }
+
+        function setupMonster() {
+            let texLoader = new THREE.TextureLoader();
+            monsterTexture = texLoader.load(MONSTER_IMAGE_URL);
+            
+            let monsterMat = new THREE.SpriteMaterial({ map: monsterTexture });
+            monster.mesh = new THREE.Sprite(monsterMat);
+            monster.mesh.scale.set(1.8, 1.8, 1);
+            
+            monster.pos.set((gridSize - 3) * cellSize, 0.9, (gridSize - 3) * cellSize);
+            monster.mesh.position.copy(monster.pos);
+            scene.add(monster.mesh);
+            pickNewPatrolTarget();
+        }
+
+        // ==========================================
+        // CONTROLES E CÂMERA 
+        // ==========================================
+        function setupControls() {
+            const btnStart = document.getElementById('btn-start');
+            btnStart.addEventListener('click', () => {
+                document.body.requestPointerLock();
+            });
+            document.addEventListener('pointerlockchange', () => {
+                if (document.pointerLockElement === document.body) {
+                    document.getElementById('start-screen').style.display = 'none';
+                    initAudio();
+                } else {
+                    if (bricksCollected < totalBricks && monster.state !== "DEAD") {
+                        document.getElementById('start-screen').style.display = 'flex';
+                    }
+                }
+            });
+            window.addEventListener('keydown', (e) => {
+                switch (e.code) {
+                    case 'KeyW': moveForward = true; break;
+                    case 'KeyS': moveBackward = true; break;
+                    case 'KeyA': moveLeft = true; break;
+                    case 'KeyD': moveRight = true; break;
+                    case 'ShiftLeft': isSprinting = true; break;
+                }
+                checkMinimapCheatCode(e.code);
+            });
+            window.addEventListener('keyup', (e) => {
+                switch (e.code) {
+                    case 'KeyW': moveForward = false; break;
+                    case 'KeyS': moveBackward = false; break;
+                    case 'KeyA': moveLeft = false; break;
+                    case 'KeyD': moveRight = false; break;
+                    case 'ShiftLeft': isSprinting = false; break;
+                }
+            });
+            
+            document.addEventListener('mousemove', (e) => {
+                if (document.pointerLockElement !== document.body) return;
+                
+                player.rot.y -= e.movementX * 0.0025; 
+                player.rot.x -= e.movementY * 0.0025; 
+                
+                player.rot.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, player.rot.x));
+                camera.rotation.set(player.rot.x, player.rot.y, 0, 'YXZ');
+            });
+            document.getElementById('btn-restart-death').addEventListener('click', resetGame);
+            document.getElementById('btn-restart-win').addEventListener('click', resetGame);
+        }
+
+        // ==========================================
+        // SISTEMA DE COLISÃO
+        // ==========================================
+        function checkCollision(targetX, targetZ) {
+            const buffer = player.radius;
+            const checkPoints = [
+                { x: targetX - buffer, z: targetZ - buffer },
+                { x: targetX + buffer, z: targetZ - buffer },
+                { x: targetX - buffer, z: targetZ + buffer },
+                { x: targetX + buffer, z: targetZ + buffer }
+            ];
+            for (let p of checkPoints) {
+                let cellX = Math.round(p.x / cellSize);
+                let cellZ = Math.round(p.z / cellSize);
+                
+                if (cellX < 0 || cellX >= gridSize || cellZ < 0 || cellZ >= gridSize) return true;
+                if (mapGrid[cellZ] && mapGrid[cellZ][cellX] === 1) return true; 
+            }
+            return false;
+        }
+
+        // ==========================================
+        // INTELIGÊNCIA ARTIFICIAL DO MONSTRO
+        // ==========================================
+        function pickNewPatrolTarget() {
+            let validCells = [];
+            for (let r = 1; r < gridSize - 1; r++) {
+                for (let c = 1; c < gridSize - 1; c++) {
+                    if (mapGrid[r] && mapGrid[r][c] === 0) {
+                        let cellX = c * cellSize;
+                        let cellZ = r * cellSize;
+                        let distToPlayer = player.pos.distanceTo(new THREE.Vector3(cellX, 0.9, cellZ));
+                        validCells.push({ r, c, distToPlayer });
+                    }
+                }
+            }
+            validCells.sort((a, b) => a.distToPlayer - b.distToPlayer);
+            let maxRangeIndex = Math.min(Math.floor(validCells.length * 0.45), validCells.length); 
+            if(maxRangeIndex < 1) maxRangeIndex = validCells.length;
+            
+            let choice = validCells[Math.floor(Math.random() * maxRangeIndex)];
+            if(choice) {
+                monster.patrolTarget.set(choice.c * cellSize, 0.9, choice.r * cellSize);
+            }
+        }
+
+        function relocateMonsterNearPlayer() {
+            // Direcao para a qual o jogador esta olhando, para nao reposicionar o monstro logo atras dele
+            let forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(upAxis, player.rot.y);
+
+            let allOpenCells = [];
+            for (let r = 1; r < gridSize - 1; r++) {
+                for (let c = 1; c < gridSize - 1; c++) {
+                    if (mapGrid[r] && mapGrid[r][c] === 0) {
+                        let cellPos = new THREE.Vector3(c * cellSize, 0.9, r * cellSize);
+                        let d = player.pos.distanceTo(cellPos);
+                        let dirToCell = cellPos.clone().sub(player.pos).normalize();
+                        let facingDot = dirToCell.dot(forward);
+                        allOpenCells.push({ r, c, d, facingDot });
+                    }
+                }
+            }
+
+            // Faixa preferida: ~4 a 5 blocos de distancia, fora da zona diretamente atras do jogador
+            let candidates = allOpenCells.filter(cell => cell.d > 16 && cell.d < 20 && cell.facingDot > -0.5);
+            // Fallback: se nao houver nenhuma celula nessa faixa exata, alarga um pouco a busca
+            if (candidates.length === 0) {
+                candidates = allOpenCells.filter(cell => cell.d > 12 && cell.d < 28 && cell.facingDot > -0.5);
+            }
+            if (candidates.length === 0) return;
+
+            let pick = candidates[Math.floor(Math.random() * candidates.length)];
+            monster.pos.set(pick.c * cellSize, 0.9, pick.r * cellSize);
+            if (monster.mesh) monster.mesh.position.copy(monster.pos);
+            monster.state = "PATROL";
+            pickNewPatrolTarget();
+        }
+
+        function updateMonsterAI(delta) {
+            if (!monster.mesh) return;
+            let distToPlayer = monster.pos.distanceTo(player.pos);
+            
+            let hasLineOfSight = false;
+            if (distToPlayer < monster.chaseRadius) {
+                // OTIMIZAÇÃO: Reciclando vetores
+                _dirToPlayer.subVectors(player.pos, monster.pos).normalize();
+                globalRaycaster.set(monster.pos, _dirToPlayer);
+                let intersects = globalRaycaster.intersectObjects(walls);
+                
+                if (intersects.length === 0 || intersects[0].distance > distToPlayer) {
+                    hasLineOfSight = true;
+                }
+            }
+
+            if (hasLineOfSight) {
+                if (monster.state !== "CHASE") {
+                    playChaseGlitchSound();
+                    if (chaseAudioEl) chaseAudioEl.currentTime = 0;
+                }
+                monster.state = "CHASE";
+                monster.lostTimer = 0; 
+                monster.encounterTimer = 0;
+            } else if (monster.state === "CHASE") {
+                monster.lostTimer += delta;
+                if (monster.lostTimer > 3.0) { 
+                    monster.state = "PATROL";
+                    pickNewPatrolTarget();
+                }
+            }
+
+            if (monster.state !== "CHASE") {
+                monster.encounterTimer += delta;
+                if (monster.encounterTimer > 20) {
+                    relocateMonsterNearPlayer();
+                    monster.encounterTimer = 0;
+                }
+            }
+
+            let target = (monster.state === "CHASE") ? player.pos : monster.patrolTarget;
+            
+            // OTIMIZAÇÃO: Calculando movimento sem criar novos vetores toda hora
+            let dx = target.x - monster.pos.x;
+            let dz = target.z - monster.pos.z;
+            let dist = Math.sqrt(dx*dx + dz*dz);
+            
+            let currentSpeed = (monster.state === "CHASE") ? monster.speed * monster.chaseSpeedMultiplier : monster.speed;
+            
+            let didMove = false;
+            if (dist > 0.1) {
+                let moveX = (dx / dist) * currentSpeed * delta * 60;
+                let moveZ = (dz / dist) * currentSpeed * delta * 60;
+
+                // Movimento por eixo separado: permite "deslizar" nas paredes em vez de travar em quinas
+                let cellZatCurrentX = Math.round(monster.pos.z / cellSize);
+                let checkCellX = Math.round((monster.pos.x + moveX) / cellSize);
+                if (mapGrid[cellZatCurrentX] && mapGrid[cellZatCurrentX][checkCellX] === 0) {
+                    monster.pos.x += moveX;
+                    didMove = true;
+                }
+
+                let cellXatCurrentZ = Math.round(monster.pos.x / cellSize);
+                let checkCellZ = Math.round((monster.pos.z + moveZ) / cellSize);
+                if (mapGrid[checkCellZ] && mapGrid[checkCellZ][cellXatCurrentZ] === 0) {
+                    monster.pos.z += moveZ;
+                    didMove = true;
+                }
+
+                if (!didMove && monster.state === "PATROL") pickNewPatrolTarget();
+            } else {
+                if (monster.state === "PATROL") pickNewPatrolTarget();
+            }
+
+            // Se o monstro ficar sem se mover por muito tempo (preso em parede/quina), forca um novo alvo
+            if (didMove) {
+                monster.stuckTimer = 0;
+            } else {
+                monster.stuckTimer += delta;
+                if (monster.stuckTimer > 1.5) {
+                    monster.stuckTimer = 0;
+                    monster.state = "PATROL";
+                    pickNewPatrolTarget();
+                }
+            }
+
+            monster.mesh.position.copy(monster.pos);
+            updateMonsterAudio(distToPlayer, monster.state === "CHASE");
+            if (distToPlayer < 0.8) {
+                triggerJumpscare();
+            }
+        }
+
+        // ==========================================
+        // GAME OVER E JUMPSCARE
+        // ==========================================
+        const JUMPSCARE_AUDIO_URL = "__JUMPSCARE_AUDIO_DATA_URI__";
+        function triggerJumpscare() {
+            monster.state = "DEAD";
+            document.exitPointerLock();
+            
+            playJumpscareSound();
+            new Audio(JUMPSCARE_AUDIO_URL).play();
+            if(audioCtx && chaseGain) chaseGain.gain.setValueAtTime(0, audioCtx.currentTime);
+
+            const jsScreen = document.getElementById('jumpscare-screen');
+            const jsImg = document.getElementById('jumpscare-img');
+            jsImg.src = MONSTER_IMAGE_URL;
+            
+            jsScreen.style.display = 'flex';
+            setTimeout(() => {
+                jsScreen.style.display = 'none';
+                document.getElementById('gameover-screen').style.display = 'flex';
+            }, 1200);
+        }
+
+        // ==========================================
+        // LOOP DO JOGO
+        // ==========================================
+        function animate() {
+            requestAnimationFrame(animate);
+            let delta = clock.getDelta();
+            if (delta > 0.1) delta = 0.1;
+            
+            if (document.pointerLockElement === document.body && monster.state !== "DEAD") {
+                
+                let basePlayerSpeed = 0.05; 
+                let sprintPlayerSpeedMultiplier = 1.8; 
+                let currentMaxSpeed = basePlayerSpeed;
+                let isMoving = moveForward || moveBackward || moveLeft || moveRight;
+                
+                if (isSprinting && isMoving && player.stamina > 0) {
+                    currentMaxSpeed = basePlayerSpeed * sprintPlayerSpeedMultiplier;
+                    player.stamina -= delta * 35; 
+                    if (player.stamina < 0) player.stamina = 0;
+                } else {
+                    if (player.stamina < 100) {
+                        player.stamina += delta * 15;
+                        if (player.stamina > 100) player.stamina = 100;
+                    }
+                    if (player.stamina < 15 && isSprinting) {
+                        currentMaxSpeed = basePlayerSpeed * 0.6; 
+                    }
+                }
+                document.getElementById('stamina-bar').style.width = player.stamina + '%';
+                
+                // OTIMIZAÇÃO: Reciclando matemática vetorial
+                _moveVector.set(0, 0, 0);
+                _forwardMat.set(0, 0, -1).applyAxisAngle(upAxis, player.rot.y);
+                _rightMat.set(1, 0, 0).applyAxisAngle(upAxis, player.rot.y);
+
+                if (moveForward) _moveVector.add(_forwardMat);
+                if (moveBackward) _moveVector.sub(_forwardMat);
+                if (moveRight) _moveVector.add(_rightMat);
+                if (moveLeft) _moveVector.sub(_rightMat);
+
+                if (_moveVector.lengthSq() > 0) {
+                    _moveVector.normalize();
+                    let stepDist = currentMaxSpeed * delta * 60;
+                    let checkX = player.pos.x + (_moveVector.x * stepDist);
+                    let checkZ = player.pos.z + (_moveVector.z * stepDist);
+                    
+                    if (!checkCollision(checkX, player.pos.z)) player.pos.x = checkX;
+                    if (!checkCollision(player.pos.x, checkZ)) player.pos.z = checkZ;
+                    
+                    let now = Date.now();
+                    let stepDelay = isSprinting ? 280 : 450;
+                    if (now - lastFootstepTime > stepDelay) {
+                        playFootstep();
+                        lastFootstepTime = now;
+                    }
+                }
+
+                camera.position.copy(player.pos);
+                if (_moveVector.lengthSq() > 0) {
+                    let bobSpeed = isSprinting ? 12 : 8;
+                    camera.position.y += Math.sin(Date.now() * 0.001 * bobSpeed) * 0.04;
+                }
+                if (monster.state === "CHASE") {
+                    camera.position.x += (Math.random() - 0.5) * 0.06;
+                    camera.position.y += (Math.random() - 0.5) * 0.06;
+                    camera.position.z += (Math.random() - 0.5) * 0.06;
+                }
+
+                for (let i = bricks.length - 1; i >= 0; i--) {
+                    if (player.pos.distanceTo(bricks[i].position) < 1.0) {
+                        scene.remove(bricks[i]);
+                        bricks.splice(i, 1);
+                        bricksCollected++;
+                        document.getElementById('counter').innerText = `FORD KAS COLETADOS: ${bricksCollected} / 5`;
+                        playCollectSound();
+                        if (bricksCollected >= totalBricks) {
+                            triggerWin();
+                        }
+                    }
+                }
+
+                updateMonsterAI(delta);
+                drawMinimap();
+            }
+
+            bricks.forEach(brick => {
+                brick.rotation.y += 0.02;
+                brick.position.y = 0.3 + Math.sin(Date.now() * 0.003) * 0.05;
+            });
+            renderer.render(scene, camera);
+        }
+
+        // ==========================================
+        // FLUXO DE TELAS DO JOGO
+        // ==========================================
+        function triggerWin() {
+            monster.state = "DEAD";
+            document.exitPointerLock();
+            if (audioCtx && chaseGain) chaseGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            document.getElementById('win-screen').style.display = 'flex';
+        }
+
+        function resetGame() {
+            bricks.forEach(b => scene.remove(b));
+            walls.forEach(w => scene.remove(w));
+            if(monster.mesh) scene.remove(monster.mesh);
+            
+            bricks = [];
+            walls = [];
+            bricksCollected = 0;
+            document.getElementById('counter').innerText = `FORD KAS COLETADOS: 0 / 5`;
+
+            player.pos.set(4, 0.8, 4); 
+            player.rot.set(0, 0, 0);
+            player.stamina = 100;
+            camera.rotation.set(0,0,0, 'YXZ');
+            const wallGeo = new THREE.BoxGeometry(cellSize, cellSize, cellSize);
+            const wallMat = new THREE.MeshStandardMaterial({ map: wallTexture, roughness: 0.8 });
+            for (let r = 0; r < gridSize; r++) {
+                for (let c = 0; c < gridSize; c++) {
+                    if (mapGrid[r] && mapGrid[r][c] === 1) {
+                        const wall = new THREE.Mesh(wallGeo, wallMat);
+                        wall.position.set(c * cellSize, cellSize / 2, r * cellSize);
+                        scene.add(wall);
+                        walls.push(wall);
+                    }
+                }
+            }
+
+            spawnBricks();
+            monster.state = "PATROL";
+            setupMonster();
+
+            document.getElementById('gameover-screen').style.display = 'none';
+            document.getElementById('win-screen').style.display = 'none';
+            document.body.requestPointerLock();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        window.onload = () => {
+            init();
+            animate();
+        };
+    </script>
+</body>
+</html>
