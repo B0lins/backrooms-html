@@ -36,6 +36,7 @@ BINARY_ASSET_PLACEHOLDERS = {
         "__LEVEL1_CHASE_AUDIO_DATA_URI__": "chase",
         "__LEVEL1_COLLECTIBLE_IMAGE_DATA_URI__": "collectible",
         "__LEVEL1_JUMPSCARE_AUDIO_DATA_URI__": "jumpscare",
+        "__LEVEL1_HEARTBEAT_AUDIO_DATA_URI__": "heartbeat",
     },
     2: {
         "__LEVEL2_VILLAIN_IMAGE_DATA_URI__": "enemy",
@@ -43,6 +44,7 @@ BINARY_ASSET_PLACEHOLDERS = {
         "__LEVEL2_COLLECTIBLE_IMAGE_DATA_URI__": "collectible",
         "__LEVEL2_JUMPSCARE_AUDIO_DATA_URI__": "jumpscare",
         "__LEVEL2_AMBIENT_AUDIO_DATA_URI__": "ambient",
+        "__LEVEL2_HEARTBEAT_AUDIO_DATA_URI__": "heartbeat",
     },
 }
 
@@ -50,6 +52,7 @@ BINARY_ASSET_PLACEHOLDERS = {
 TEXT_ASSET_PLACEHOLDERS = {
     1: {
         "__COLLECTIBLE_COUNT__": "collectible_count",
+        "__WIN_SCREEN_TEXT__": "win_text",
     },
 }
 
