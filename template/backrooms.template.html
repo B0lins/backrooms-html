@@ -832,6 +832,7 @@
             if (!cachedCollectibleMaterialByLevel[level]) {
                 let url = level === 2 ? LEVEL2_COLLECTIBLE_IMAGE_URL : LEVEL1_COLLECTIBLE_IMAGE_URL;
                 let collectibleTexLoader = new THREE.TextureLoader();
+                collectibleTexLoader.setCrossOrigin('anonymous');
                 let collectibleTexture = collectibleTexLoader.load(url);
                 cachedCollectibleMaterialByLevel[level] = new THREE.SpriteMaterial({ map: collectibleTexture });
             }
@@ -842,6 +843,7 @@
             if (!cachedMonsterMaterialByLevel[level]) {
                 let url = level === 2 ? LEVEL2_MONSTER_IMAGE_URL : LEVEL1_MONSTER_IMAGE_URL;
                 let texLoader = new THREE.TextureLoader();
+                texLoader.setCrossOrigin('anonymous');
                 let tex = texLoader.load(url);
                 cachedMonsterMaterialByLevel[level] = new THREE.SpriteMaterial({ map: tex });
             }

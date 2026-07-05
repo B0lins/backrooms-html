@@ -13,8 +13,12 @@ Lookup order for a given theme/level/asset (first match wins):
   2. assets/default/level_<N>/<base-name>.*
   3. assets/<theme>/level_1/<base-name>.*      (falls back to that theme's level 1)
   4. assets/default/level_1/<base-name>.*      (final fallback)
+
+Binary assets (images/audio) are NOT embedded as base64 - the generated HTML
+instead points to their raw GitHub URL. This means any local asset change must
+be pushed to GITHUB_BRANCH before rebuilding, or the game will keep loading the
+previously-pushed version.
 """
-import base64
 import pathlib
 import sys
 
@@ -22,12 +26,9 @@ ROOT = pathlib.Path(__file__).parent
 TEMPLATE = ROOT / "template" / "backrooms.template.html"
 ASSETS = ROOT / "assets"
 
-MIME_TYPES = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".mp3": "audio/mpeg",
-}
+GITHUB_REPO = "B0lins/backrooms-html"
+GITHUB_BRANCH = "main"
+GITHUB_RAW_BASE = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}"
 
 # Each entry links a template placeholder to a binary asset's "base name", per level
 BINARY_ASSET_PLACEHOLDERS = {
@@ -77,10 +78,9 @@ def find_asset(theme, level, base_name):
     )
 
 
-def to_data_uri(path):
-    mime = MIME_TYPES.get(path.suffix.lower(), "application/octet-stream")
-    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{b64}"
+def to_github_url(path):
+    relative_path = path.relative_to(ROOT)
+    return f"{GITHUB_RAW_BASE}/{relative_path.as_posix()}"
 
 
 def build(theme):
@@ -89,8 +89,8 @@ def build(theme):
     for level, placeholders in BINARY_ASSET_PLACEHOLDERS.items():
         for placeholder, base_name in placeholders.items():
             asset_path = find_asset(theme, level, base_name)
-            content = content.replace(placeholder, to_data_uri(asset_path))
-            print(f"  level {level} {base_name}: using {asset_path.relative_to(ROOT)}")
+            content = content.replace(placeholder, to_github_url(asset_path))
+            print(f"  level {level} {base_name}: -> {to_github_url(asset_path)}")
 
     for level, placeholders in TEXT_ASSET_PLACEHOLDERS.items():
         for placeholder, base_name in placeholders.items():
@@ -102,6 +102,8 @@ def build(theme):
     out_path = ROOT / f"backrooms-{theme}.html"
     out_path.write_text(content, encoding="utf-8")
     print(f"Generated: {out_path.name}")
+    print("Lembrete: os assets binarios precisam estar dando push no GitHub "
+          f"(branch '{GITHUB_BRANCH}') para o jogo funcionar de verdade.")
 
 
 if __name__ == "__main__":
