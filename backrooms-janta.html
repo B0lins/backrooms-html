@@ -561,8 +561,12 @@
             humGain.connect(audioCtx.destination);
             humOsc.start();
 
-            chaseAudioEl = new Audio(LEVEL1_MONSTER_AUDIO_URL);
+            // crossOrigin must be set before the src, or cross-origin audio (GitHub) gets
+            // silently muted once routed through the Web Audio graph below
+            chaseAudioEl = new Audio();
+            chaseAudioEl.crossOrigin = 'anonymous';
             chaseAudioEl.loop = true;
+            chaseAudioEl.src = LEVEL1_MONSTER_AUDIO_URL;
             let chaseSource = audioCtx.createMediaElementSource(chaseAudioEl);
             chaseGain = audioCtx.createGain();
             chaseGain.gain.setValueAtTime(0, audioCtx.currentTime);
@@ -570,8 +574,10 @@
             chaseGain.connect(audioCtx.destination);
             chaseAudioEl.play();
 
-            heartbeatAudioEl = new Audio(LEVEL1_HEARTBEAT_AUDIO_URL);
+            heartbeatAudioEl = new Audio();
+            heartbeatAudioEl.crossOrigin = 'anonymous';
             heartbeatAudioEl.loop = true;
+            heartbeatAudioEl.src = LEVEL1_HEARTBEAT_AUDIO_URL;
             let heartbeatSource = audioCtx.createMediaElementSource(heartbeatAudioEl);
             heartbeatGain = audioCtx.createGain();
             heartbeatGain.gain.setValueAtTime(0, audioCtx.currentTime);
