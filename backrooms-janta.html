@@ -745,8 +745,16 @@
             ctx.fill();
         }
 
+        // Timestamp (ms, Date.now()) until which the chase music is forced silent,
+        // regardless of chase state - used for the brief hush right as level 2 begins
+        let chaseMusicSilencedUntil = 0;
+
         function updateMonsterAudio(dist, isChase) {
             if (!audioCtx || !chaseGain) return;
+            if (Date.now() < chaseMusicSilencedUntil) {
+                chaseGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+                return;
+            }
             if (isChase) {
                 chaseGain.gain.setTargetAtTime(0.6, audioCtx.currentTime, 0.1);
             } else {
@@ -1476,6 +1484,12 @@
 
             // Respawn the enemy at a medium distance right as level 2 begins
             relocateMonsterNearPlayer();
+
+            // Brief hush right as the enemy teleports in - if it happened to already be
+            // chasing right before the last collectible was grabbed, this keeps the chase
+            // music from playing for a beat while the enemy is still out of sight
+            chaseMusicSilencedUntil = Date.now() + (1000 + Math.random() * 2000);
+            if (audioCtx && chaseGain) chaseGain.gain.setValueAtTime(0, audioCtx.currentTime);
 
             if (chaseAudioEl) {
                 chaseAudioEl.pause();
