@@ -323,6 +323,10 @@
         const BASE_PLAYER_SPEED = 0.05;
         const SPRINT_SPEED_MULTIPLIER = 1.8;
         const EXHAUSTED_SPRINT_SPEED_FACTOR = 0.6;
+        // Once stamina hits 0, the player stays "exhausted" (locked out of full sprint)
+        // until it recovers back up to this percentage - prevents flickering between
+        // full-sprint and exhausted speed frame-to-frame right at the 0 boundary
+        const EXHAUSTION_RECOVERY_THRESHOLD = 30;
 
         // Player state
         let player = {
@@ -330,6 +334,7 @@
             rot: new THREE.Vector3(),
             speed: 0.05,
             stamina: 100,
+            isExhausted: false,
             radius: 0.6
         };
         let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false, isSprinting = false;
@@ -1316,7 +1321,18 @@
                 let currentMaxSpeed = BASE_PLAYER_SPEED;
                 let isMoving = moveForward || moveBackward || moveLeft || moveRight;
 
-                if (isSprinting && isMoving && player.stamina > 0) {
+                // Once stamina hits 0, lock the player into "exhausted" until it recovers past
+                // the threshold - without this, stamina regenerating a tiny bit the instant it
+                // hits 0 would immediately re-qualify for full sprint again next frame, causing
+                // speed to flicker between full-sprint and exhausted (netting out faster than walking)
+                if (player.stamina <= 0) {
+                    player.isExhausted = true;
+                }
+                if (player.isExhausted && player.stamina >= EXHAUSTION_RECOVERY_THRESHOLD) {
+                    player.isExhausted = false;
+                }
+
+                if (isSprinting && isMoving && player.stamina > 0 && !player.isExhausted) {
                     currentMaxSpeed = BASE_PLAYER_SPEED * SPRINT_SPEED_MULTIPLIER;
                     player.stamina -= delta * 35;
                     if (player.stamina < 0) player.stamina = 0;
@@ -1325,7 +1341,7 @@
                         player.stamina += delta * 15;
                         if (player.stamina > 100) player.stamina = 100;
                     }
-                    if (player.stamina < 15 && isSprinting) {
+                    if (player.isExhausted && isSprinting) {
                         currentMaxSpeed = BASE_PLAYER_SPEED * EXHAUSTED_SPRINT_SPEED_FACTOR;
                     }
                 }
@@ -1529,6 +1545,7 @@
             player.pos.set(4, 0.8, 4);
             player.rot.set(0, 0, 0);
             player.stamina = 100;
+            player.isExhausted = false;
             camera.rotation.set(0,0,0, 'YXZ');
             buildWalls(generateMaze());
 
